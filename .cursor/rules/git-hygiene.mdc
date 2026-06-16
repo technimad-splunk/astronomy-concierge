@@ -1,0 +1,42 @@
+---
+description: Git hygiene — commit discipline, branching, and merge cadence
+alwaysApply: true
+---
+
+# Git Hygiene
+
+## Commit messages
+
+Commit messages are the implementation-level companion to `CHANGELOG.md`. They describe *how* a change was made; the changelog describes *why* and *what impact* it had.
+
+Structure:
+```
+<type>(<scope>): <short summary>
+
+<body: implementation detail, edge cases, decisions made>
+```
+
+Types: `feat`, `fix`, `chore`, `docs`, `refactor`, `test`, `ci`.
+
+```
+✅ feat(api): add streaming endpoint for LLM responses
+   Uses SSE; falls back to JSON for clients that set Accept: application/json.
+
+❌ "fixed stuff"
+❌ "WIP"
+```
+
+## Branching
+
+- `main` is always in a releasable state. Never push broken code directly to `main`.
+- Create a branch for any non-trivial change: new features, refactors, experiments.
+- Branch naming: `<type>/<short-slug>` — e.g. `feat/streaming-api`, `fix/timeout-handling`.
+- Merge back to `main` regularly (at least once the work is stable); avoid long-lived branches.
+
+## Safety rules (always observed)
+
+- NEVER force-push to `main`.
+- NEVER skip hooks (`--no-verify`) unless explicitly instructed by the user.
+- NEVER amend a commit that has already been pushed to remote.
+- ONLY create commits when the user explicitly asks for a commit.
+- ONLY push to remote when the user explicitly asks for a push.

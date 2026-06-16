@@ -1,0 +1,33 @@
+---
+description: Automate repetitive tasks and always verify changes before considering work complete
+alwaysApply: true
+---
+
+# Automate and Verify
+
+## Principle
+
+Work is not done until it has been verified. Prefer automation over manual steps so that verification is repeatable and low-effort.
+
+## Verification checklist (before marking any task complete)
+
+1. **Build passes** — if a build step exists, run it.
+2. **Tests pass** — run the full test suite; do not skip failing tests without explicit user approval.
+3. **Linters / formatters** — run any configured linters and fix reported issues.
+4. **Manual smoke-test** — if no automated tests cover the changed behaviour, do a quick manual check.
+
+## Automation guidance
+
+- If you find yourself doing the same multi-step task more than once, script it.
+- Add automation to the project's `scripts/` directory and document it in `README.md`.
+- Prefer CI (e.g. GitHub Actions) for checks that gate merges into `main`.
+- Grow the automation layer incrementally as the project matures; do not over-engineer upfront.
+
+## Do / Don't
+
+```
+✅ Run `npm test` (or equivalent) before declaring a feature done.
+✅ Add a script for any setup step that takes more than two commands.
+❌ Mark a task complete without having actually run the code.
+❌ Suppress test failures with skip flags to move faster.
+```

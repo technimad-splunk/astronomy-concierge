@@ -1,0 +1,49 @@
+---
+description: Keep README.md current and human-readable at all times
+alwaysApply: true
+---
+
+# README Maintenance
+
+`README.md` is the first thing any person (or agent) reads. Keep it accurate and useful.
+
+## Required sections
+
+The README must always contain:
+1. **Goal** — one short paragraph: what the project does and why it exists.
+2. **Installation** — exact steps to get from zero to running (commands, prerequisites).
+3. **Example usage** — at least one concrete example showing the primary use case.
+
+## When to update
+
+Update `README.md` whenever:
+- The project's purpose or scope changes.
+- Installation steps change (new deps, env vars, platform requirements).
+- A new primary feature is added or an existing one changes user-facing behaviour.
+
+## What NOT to put here
+
+- Internal implementation details (use code comments or `docs/`).
+- Decisions and rationale (use `CHANGELOG.md` and `docs/agent-journal.md`).
+- Exhaustive API reference (link out to dedicated docs).
+
+## Example structure
+
+```markdown
+# Project Name
+
+One-sentence description.
+
+## Goal
+...
+
+## Installation
+\`\`\`sh
+# steps here
+\`\`\`
+
+## Example usage
+\`\`\`sh
+# concrete example here
+\`\`\`
+```

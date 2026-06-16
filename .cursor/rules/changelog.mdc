@@ -1,0 +1,43 @@
+---
+description: Maintain CHANGELOG.md with intent, rationale, and impact for every meaningful change
+alwaysApply: true
+---
+
+# Changelog Maintenance
+
+`CHANGELOG.md` follows [Keep a Changelog](https://keepachangelog.com) format with [Semantic Versioning](https://semver.org).
+
+## Entry anatomy
+
+Every entry must capture three things:
+
+| Field | Question it answers |
+|---|---|
+| **Intent** | What was the goal of this change? |
+| **Rationale** | Why was this approach chosen? |
+| **Impact** | How did it affect the codebase and user experience? |
+
+## Format
+
+```markdown
+## [Unreleased]
+
+### Added / Changed / Fixed / Removed
+- **Intent:** <what you set out to do>
+  **Rationale:** <why this way>
+  **Impact:** <what changed for users and the codebase>
+```
+
+## When to update
+
+- After every meaningful feature addition, change, fix, or removal.
+- Before releasing a version: move items from `[Unreleased]` to a versioned block.
+- Do NOT record trivial chores (whitespace, typo in a comment) unless they affect behaviour.
+
+## Do / Don't
+
+```
+✅ DO: "Added streaming support. Rationale: reduces time-to-first-token for large outputs. Impact: new --stream flag; existing callers unaffected."
+❌ DON'T: "Updated stuff."
+❌ DON'T: Detailed function-level implementation notes (those belong in commit messages).
+```

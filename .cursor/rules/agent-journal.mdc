@@ -1,0 +1,40 @@
+---
+description: Append a dated entry to docs/agent-journal.md after every meaningful agent action
+alwaysApply: true
+---
+
+# Agent Journal
+
+`docs/agent-journal.md` is a persistent record of what agents did in this project, why, and what trade-offs were made. It creates an audit trail and preserves context for future agents and humans.
+
+## When to write an entry
+
+After any meaningful action, including:
+- Implementing a new feature or significant refactor.
+- Making a non-obvious architectural decision.
+- Choosing between multiple approaches.
+- Encountering and resolving a blocker.
+
+Skip trivial edits (fixing a typo, reformatting).
+
+## Entry format
+
+```markdown
+## YYYY-MM-DD — <Short title>
+
+**What:** <1-2 sentences describing what was done>
+
+**Why:** <rationale — why this approach over alternatives>
+
+**Decisions / trade-offs:**
+- <decision 1>
+- <decision 2>
+
+**Effect on codebase / UX:** <what changed and for whom>
+```
+
+## Rules
+
+- Append entries; never delete or rewrite past entries.
+- Keep entries factual and concise — this is not a narrative essay.
+- If a decision reverses a previous one, reference the earlier entry date.
