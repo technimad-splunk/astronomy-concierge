@@ -31,9 +31,10 @@ scripts/control-plane.sh playlist [--message <pillar>]... [--budget <min>]   # c
 - **reset** — runs the **trigger-level reset** (authoritative, deterministic) and
   then the scenario's `reset.sh` if present. Restores baseline.
 - **verify** — runs the `expected_signals` auto-verification hook and prints a
-  pass/fail report. Galileo signals are checked for **real** (poll/retry to
-  tolerate ingestion lag, L2); Splunk signals are reported **unverified-by-design**
-  (see below).
+  report. Galileo signals are checked for **real** (poll/retry to tolerate
+  ingestion lag, L2); the Splunk `apm_all_green` signal is reported **attested**
+  (operator-verified out-of-band, with embedded evidence — the CLI's ingest-only
+  token can't query APM; see below).
 - **playlist** — composes a run by selecting/ordering scenarios keyed by `message`
   (pillar) and fitting a `--budget` time budget (minutes).
 
@@ -58,18 +59,24 @@ core edits**. The agent picks up agent-side overlays on its **next run**.
 Verifiers are **pluggable per backend** (the `SignalVerifier` interface):
 
 - **Galileo (real):** reads `GALILEO_*` from the environment, resolves the project
-  + log stream, and polls recent traces with retry/timeout. Named signals map to
-  concrete metric checks (e.g. `context_adherence_low` →
-  `context_adherence`/`groundedness < GALILEO_METRIC_LOW_THRESHOLD`;
-  `tool_selection_quality_low` → `tool_selection_quality`). Where a metric isn't
-  queryable yet (scorer not enabled / no data), the signal is reported
-  `unverifiable` ("needs Phase-4 data") — **never faked as a pass**.
-- **Splunk (unverified-by-design):** our `SPLUNK_ACCESS_TOKEN` is **ingest-only**
-  (the management/APM API returns 401), so this repo does **not** query Splunk APM
-  live. The Splunk verifier reports every signal (e.g. `apm_all_green`)
-  `unverified (ingest-only token; needs an org/API token or SE-driven MCP/UI
-  check)`. **The SE confirms Splunk via the Splunk Observability MCP / UI.**
+  + log stream, and polls recent traces with retry/timeout. Galileo returns each
+  trace's scorer metrics keyed by the scorer's **UUID**, so the verifier fetches
+  the project's scorer definitions (`Scorers().list()`), builds a live name→UUID
+  map, and looks each signal's scorer up by **both** name and UUID across its
+  value sub-keys (`@average`/`@min`/`@max`/`_multijudge_average`). Named signals
+  map to concrete checks (e.g. `context_adherence_low` → `context_adherence`'s
+  worst value `< GALILEO_METRIC_LOW_THRESHOLD`; `ungrounded_claim` →
+  `completeness`/`chunk_attribution_*`). Where a scorer isn't present (not enabled
+  / no data), the signal is reported `unverifiable` — **never faked as a pass**.
+- **Splunk (`apm_all_green` is operator-attested):** our `SPLUNK_ACCESS_TOKEN` is
+  **ingest-only** (the management/APM API returns 401), so the CLI **cannot** query
+  Splunk APM live. Rather than leave the signal an indefinite "unverifiable", the
+  Splunk verifier reports `apm_all_green` as **`attested`**: a distinct result
+  state meaning the operator confirmed it out-of-band via the Splunk Observability
+  APM MCP / UI, with the **evidence embedded** in the result. It is **concierge-
+  scoped** — *the concierge path stayed green / the failure was operationally
+  invisible to APM*, NOT a claim that every service is green (the Astronomy Shop
+  ships built-in background chaos). Any other Splunk signal stays `unverifiable`.
 
-Phase-3 semantics: a run is `PASS` when nothing **failed/errored**; `unverifiable`
-signals are reported transparently and complete in Phase 4 (scorer config + the
-reference vignette).
+A run is `PASS` when nothing **failed/errored**; `attested` (operator-verified)
+and `unverifiable` (a transparent gap) signals do not by themselves fail the run.

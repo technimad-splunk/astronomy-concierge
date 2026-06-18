@@ -7,12 +7,18 @@ verifiers are **pluggable per backend** — each backend implements the same
 :class:`SignalVerifier` interface, so adding/swapping a backend never touches the
 control plane.
 
-A signal resolves to one of four statuses:
+A signal resolves to one of five statuses:
 
-- ``pass``         — the signal fired and was confirmed.
+- ``pass``         — the signal fired and was confirmed by a live query.
 - ``fail``         — the signal was checkable but did NOT fire.
-- ``unverifiable`` — cannot be checked yet (metric not queryable, ingest-only
-                     token, no data) — reported honestly, never faked as a pass.
+- ``attested``     — confirmed out-of-band by the operator (not auto-queryable
+                     from the CLI) and recorded with explicit, embedded evidence.
+                     This is NOT a faked auto-pass and NOT an indefinite
+                     "unverifiable": it is a deliberate, human-verified result
+                     for a check the CLI structurally cannot self-run (e.g. the
+                     ingest-only Splunk token can't query the APM API).
+- ``unverifiable`` — cannot be checked yet (metric not queryable, no data) —
+                     reported honestly, never faked as a pass.
 - ``error``        — the verifier itself errored (e.g. auth/network).
 """
 
@@ -25,7 +31,7 @@ from typing import TYPE_CHECKING, Literal
 if TYPE_CHECKING:
     from ..manifest import Scenario
 
-Status = Literal["pass", "fail", "unverifiable", "error"]
+Status = Literal["pass", "fail", "attested", "unverifiable", "error"]
 
 
 @dataclass
@@ -46,6 +52,10 @@ class VerificationReport:
         return [r for r in self.results if r.status == "pass"]
 
     @property
+    def attested(self) -> list[SignalResult]:
+        return [r for r in self.results if r.status == "attested"]
+
+    @property
     def failed(self) -> list[SignalResult]:
         return [r for r in self.results if r.status in ("fail", "error")]
 
@@ -55,11 +65,13 @@ class VerificationReport:
 
     @property
     def overall_pass(self) -> bool:
-        """Phase-3 semantics: a run passes when nothing FAILED or ERRORED.
+        """A run passes when nothing FAILED or ERRORED.
 
-        ``unverifiable`` signals (e.g. Splunk via an ingest-only token, or a
-        Galileo metric not yet configured) are reported transparently and do not
-        by themselves fail the run — they flag work that completes in Phase 4.
+        ``attested`` signals (operator-verified out-of-band with embedded
+        evidence) and ``unverifiable`` signals (e.g. a Galileo metric not yet
+        configured) are reported transparently and do not by themselves fail the
+        run — ``attested`` is an affirmative human confirmation, ``unverifiable``
+        flags a gap.
         """
         return not self.failed
 

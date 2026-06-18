@@ -1,13 +1,37 @@
 # scenarios/invisible-failure/scenario.yaml
+# Vignette 1 — "The Invisible Failure" (demo-design §6)
+#
+# The cleanest punchline: Galileo catches a quality failure (ungrounded answer)
+# that Splunk APM, staying green on the concierge service, cannot see.
+#
+# Trigger: the flagd `productCatalogFailure` feature flag makes the product
+# catalog service fail for product OLJCESPC7Z.  When the agent is asked about
+# this product, it gets an error from the store API but tries to answer anyway,
+# producing an ungrounded claim.  Galileo's Context Adherence drops and
+# pinpoints the ungrounded content.  The concierge service itself shows NO
+# errors in Splunk APM — the failure is invisible to traditional APM.
+#
+# NOTE: the design doc (§6/§7.1) originally referenced a flag called
+# `productCatalogStaleData`.  That flag does not exist in the vendored demo's
+# flagd config.  `productCatalogFailure` is the closest real flag that induces
+# a soft agent-level quality failure (the agent handles the tool error
+# gracefully, so its own APM trace is healthy) while Galileo catches the
+# degraded reasoning.
+
 id: invisible-failure
 title: "The Invisible Failure"
-message: observability-oversight        # which pillar it proves (for SE playlists)
+message: observability-oversight
 duration_min: 3
-trigger:                                 # how we INDUCE it (no reliance on luck)
-  type: feature_flag                     # feature_flag | rag_corpus | tool_fault | prompt_overlay
-  ref: productCatalogStaleData
+trigger:
+  type: feature_flag
+  ref: productCatalogFailure
+  params:
+    drive_prompt: >-
+      I'm interested in the Roof Binoculars (product OLJCESPC7Z). Can you tell
+      me about that product — its price, description, and whether it's a good
+      choice for a beginner? Also check if there are similar recommendations.
 expected_signals:
   galileo: [context_adherence_low, ungrounded_claim]
-  splunk:  [apm_all_green]               # the punchline assertion
+  splunk:  [apm_all_green]
 talk_track: captions/invisible-failure.md
 reset: scenarios/invisible-failure/reset.sh

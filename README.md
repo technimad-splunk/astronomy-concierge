@@ -135,11 +135,34 @@ prompt_overlay`) each `apply` a fault and `reset` it deterministically;
 `feature_flag` flips a flagd flag in the running stage, while the other three
 write to a stable agent overlay seam (`agent/_overlay/`) that `agent/` reads on its
 next run — so scenarios never edit core. The `expected_signals` hook verifies
-**Galileo** signals for real (poll/retry for ingestion lag) and reports **Splunk**
-signals as *unverified-by-design* (our token is ingest-only; confirm Splunk APM via
-the Splunk Observability MCP/UI). See [`control_plane/README.md`](control_plane/README.md).
+**Galileo** signals for real (poll/retry for ingestion lag; scorer UUIDs are
+resolved to human names live) and reports the **Splunk** `apm_all_green` signal as
+*operator-attested* with embedded evidence (our token is ingest-only, so the CLI
+can't query APM — the operator confirms it via the Splunk Observability MCP/UI).
+See [`control_plane/README.md`](control_plane/README.md).
 
-<!-- TODO: Show the reference vignette end-to-end once authored (Phase 4):
-     play invisible-failure and observe the two-lens incident (Galileo groundedness
-     drop + Splunk APM green) with expected_signals auto-verification passing. -->
+### Run the reference vignette — "The Invisible Failure" (Phase 4)
+
+The first end-to-end vignette: Galileo catches a quality failure (ungrounded
+answer) that Splunk APM, staying green on the concierge service, cannot see.
+
+**Prerequisites:** stage is up, model provider reachable, `.env` has `GALILEO_*`
+and `SPLUNK_*` values.
+
+```sh
+# Play: flip the feature flag + drive the agent with the known-good prompt
+scripts/control-plane.sh play invisible-failure \
+  --prompt "I'm interested in the Roof Binoculars (product OLJCESPC7Z). Can you tell me about that product — its price, description, and whether it's a good choice for a beginner? Also check if there are similar recommendations."
+
+# Verify: auto-check expected_signals (Galileo real PASS; Splunk apm_all_green attested)
+scripts/control-plane.sh verify invisible-failure
+
+# Reset: restore baseline (flag off, product catalog healthy)
+scripts/control-plane.sh reset invisible-failure
+```
+
+The concierge handles the product-catalog error gracefully (no crash), so its
+own traces in Splunk APM stay green — but Galileo's Context Adherence drops and
+pinpoints the ungrounded claim. See the full talk track at
+[`scenarios/invisible-failure/captions/invisible-failure.md`](scenarios/invisible-failure/captions/invisible-failure.md).
 

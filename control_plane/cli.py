@@ -9,8 +9,9 @@ Run via ``python -m control_plane <cmd>`` or ``scripts/control-plane.sh <cmd>``.
 - ``reset <id>``        — trigger-level reset (authoritative) + the per-scenario
                           ``reset.sh`` if present; restores baseline.
 - ``verify <id>``       — run the ``expected_signals`` auto-verification hook and
-                          print a pass/fail report (Galileo real; Splunk reported
-                          unverified-by-design).
+                          print a pass/fail report (Galileo real, live-queried;
+                          Splunk reported as operator-attested with embedded
+                          evidence — the ingest-only token can't query APM).
 - ``playlist``          — compose a run by ``message`` pillar within a time budget.
 
 No secrets are printed — only what state changed and which backends were used.
@@ -31,7 +32,13 @@ from .registry import Registry, discover
 from .triggers import TriggerError, apply_trigger, reset_trigger
 from .verification import DEFAULT_INTERVAL_S, DEFAULT_TIMEOUT_S, run_verification
 
-_STATUS_GLYPH = {"pass": "PASS", "fail": "FAIL", "unverifiable": "UNVERIFIED", "error": "ERROR"}
+_STATUS_GLYPH = {
+    "pass": "PASS",
+    "fail": "FAIL",
+    "attested": "ATTESTED",
+    "unverifiable": "UNVERIFIED",
+    "error": "ERROR",
+}
 
 
 def _load_env() -> None:
@@ -154,13 +161,19 @@ def cmd_verify(reg: Registry, args: argparse.Namespace) -> int:
     for r in report.results:
         print(f"  [{_STATUS_GLYPH[r.status]:10}] {r.backend}:{r.signal}")
         if r.detail:
-            print(f"               {r.detail}")
+            # Indent every line so multi-line evidence (e.g. an attestation
+            # block) stays aligned under its signal.
+            for line in r.detail.splitlines():
+                print(f"               {line}")
     print(
         f"\nSummary: {len(report.passed)} pass, {len(report.failed)} fail/error, "
-        f"{len(report.unverifiable)} unverified."
+        f"{len(report.attested)} attested, {len(report.unverifiable)} unverified."
     )
     overall = "PASS" if report.overall_pass else "FAIL"
-    print(f"Overall: {overall}  (unverified signals do not fail the run — Phase-3 semantics)")
+    print(
+        f"Overall: {overall}  (attested = operator-verified out-of-band; "
+        "attested/unverified signals do not fail the run)"
+    )
     return 0 if report.overall_pass else 1
 
 
