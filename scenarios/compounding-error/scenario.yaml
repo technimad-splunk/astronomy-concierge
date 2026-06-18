@@ -1,0 +1,49 @@
+# scenarios/compounding-error/scenario.yaml
+# Vignette 2 — "The Compounding Error" (demo-design §6)
+#
+# Message: errors compound in multi-step agents. A flaky payment service causes
+# the agent's checkout to fail; Galileo's Graph Engine surfaces the cascade,
+# Tool Selection Quality drops, and the Insights Engine clusters the failure
+# pattern. Unlike Vignette 1, this one DOES light up Splunk APM: the payment
+# service shows errors on the service map and trace waterfall.
+#
+# Trigger: `feature_flag` flips `paymentFailure` in the vendored demo's flagd
+# config (hot-reloads, no restart). The agent's `checkout` tool calls the REAL
+# checkout service via the frontend-proxy (`POST /api/checkout`), which in turn
+# calls the payment service — the flagd fault makes the payment charge fail.
+# This propagates into the agent's flow AND shows up as errors on the
+# paymentservice in Splunk APM. The agent may retry, pick wrong alternatives,
+# or report failure — all of which Galileo surfaces as degraded tool quality.
+
+id: compounding-error
+title: "The Compounding Error"
+message: error-compounding
+duration_min: 4
+
+# Drain the Locust load-generator before driving the agent so the payment
+# error spike in Splunk APM is attributable to the agent's single checkout,
+# not masked by the load-generator's continuous healthy traffic.
+quiet_background: true
+
+trigger:
+  type: feature_flag
+  ref: paymentFailure
+  params:
+    variant: "100%"
+    # NOTE: use a product that actually exists in the demo catalog. The
+    # "Eclipsmart Travel Refractor Telescope" (id 1YMWWN1N4O) is a real listing;
+    # an invented name (e.g. "Starsense Explorer") makes search return nothing,
+    # the cart stays empty, and checkout never reaches the payment service —
+    # so the paymentFailure fault would never fire.
+    drive_prompt: >-
+      I want to buy the Eclipsmart Travel Refractor Telescope today. Please do
+      each step in order: (1) search the catalog for that telescope and note its
+      exact product id and price from the search results, (2) add that product
+      to my cart using the product id you found, (3) check out to complete my
+      purchase. If checkout fails, please try checking out again — it might be a
+      transient issue. I really want to complete this order today.
+expected_signals:
+  galileo: [tool_selection_quality_low, tool_error]
+  splunk:  [payment_latency_spike, payment_error_spike]
+talk_track: captions/compounding-error.md
+reset: scenarios/compounding-error/reset.sh

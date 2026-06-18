@@ -22,6 +22,57 @@ Entries are append-only. Never delete or rewrite past entries.
 
 ---
 
+## 2026-06-18 — V3 Firewall: fix Galileo verifier for PII (entity-list) scorers
+
+**What:** Fixed the Galileo verifier so V3 "Firewall" `pii_exposed` verifies (it was reporting "none present" despite `input_pii` being enabled and firing). No prompt/vignette rework was needed.
+
+**Why:** Live trace inspection (dumping raw metric maps for the four PII scorer UUIDs) revealed two things the verifier got wrong:
+- **PII scorers emit a LIST of detected entity types**, not a scalar — e.g. `input_pii: ['phone_number','address','email','name']`, empty `[]` when clean. `_coerce_number` returned `None` for lists, so the scorer's values were silently discarded and the signal looked absent. (`prompt_injection`/`tool_error_rate` were scalar, which is why those showed up while PII didn't — explaining the user's "input_pii doesn't seem to catch it" observation.)
+- **The injected PII surfaces in the OUTPUT channel:** firewall traces show `output_pii: ['name','email','ssn','credit_card_info','phone_number','date_of_birth']` (peak 6) while `input_pii: []`. The detect logic returned on the first present scorer, so an empty `input_pii` masked a firing `output_pii`.
+- Bonus confirmation of the user's hypothesis: a synthetic user-turn PII test (name/address/phone/email, reserved test values, no card) produced `input_pii: ['phone_number','address','email','name']` — so a "customer enters their address" flow would trip `input_pii` cleanly too.
+
+**Decisions / trade-offs:**
+- `_coerce_number` now maps a `list` to `float(len(list))` (non-empty list = detection; empty = 0). Generic and low-risk — other signals are scalar.
+- Detect-direction signals (`pii_exposed`, prompt-injection) now **union values across ALL mapped scorers** and fire if any reaches `>= 1`, instead of early-returning on the first present scorer. The PASS reason names which scorers detected.
+- **Kept the existing RAG-injection firewall narrative** (passes now via `output_pii`); did NOT rework prompts. A user-enters-address variant (verified via `input_pii`) remains available as an option if a more everyday narrative is preferred.
+
+**Effect on codebase / UX:** `control_plane/verification/galileo_verifier.py` (`_coerce_number` list handling + detect cross-scorer aggregation). `verify firewall` now reports `pii_exposed` **PASS** ("detected by [input_pii, input_pii_gpt, output_pii, output_pii_gpt]: peak 6 >= 1"). No commit made; plan checkboxes untouched.
+
+---
+
+## 2026-06-18 — V2 finalization: Galileo-only verification (Option C) + loadgen restore fix
+
+**What:** Finalized V2 "Compounding Error" verification as Galileo-only with Splunk payment signals honestly UNVERIFIED. Updated reason strings and caption to explain the model-reliability requirement. Fixed `scripts/loadgen.sh restore` to treat `LOCUST_AUTOSTART=true` as success instead of printing alarming failure messages.
+
+**Why:** Live validation identified two root causes for V2's Splunk payment silence: (1) the original drive_prompt referenced a non-existent product ("Starsense Explorer Telescope") — fixed by the parent to the real "Eclipsmart Travel Refractor Telescope" (id 1YMWWN1N4O); (2) `llama3.1:8b` is unreliable at the 3-step tool chain (search → add_to_cart → checkout) — in one run it emitted `{"name": "check_out"}` as TEXT (hallucinated tool name, never executed), so the agent never reaches `payment.Charge`. A deterministic store-client probe confirmed the cart mechanism itself is correct. Galileo signals pass robustly: `tool_selection_quality_low` (min 0.0) and `tool_error` (tool_error_rate peak 0.667). The agent-side compounding-error cascade is real and well-captured by Galileo regardless of model. For `loadgen.sh`, the Locust web API `/swarm` call returns empty in this environment, but the container has `LOCUST_AUTOSTART=true`, so (re)starting the container makes Locust auto-swarm to `LOCUST_USERS` without any API call — a running container IS success.
+
+**Decisions / trade-offs:**
+- **Option C (Galileo-only verification):** Do NOT fabricate a Splunk attestation — we have no positive payment-error evidence on the default model. Splunk payment signals stay UNVERIFIED, explained as operator-attested only when the demo runs on a tool-capable model.
+- **Model recommendations:** OpenAI `gpt-4o-mini` or Ollama `qwen2.5:14b-instruct` / `qwen2.5-coder:14b` (Qwen2.5 has more reliable function-calling than `llama3.1:8b`). Documented in both the UNVERIFIED reason strings and the caption's model table.
+- **Loadgen restore:** The Locust API `/swarm` call is now best-effort, not a failure condition. A running container with `LOCUST_AUTOSTART=true` prints a clear success message ("autostart will resume ~N users within ~30-60s") instead of "may need manual attention". `quiet` (drain) unchanged.
+- **Drive prompt NOT changed:** The parent already fixed it to a real product; this session did not touch it.
+
+**Effect on codebase / UX:** Changed `control_plane/verification/splunk_verifier.py` (payment signal UNVERIFIED reason strings), `scenarios/compounding-error/captions/compounding-error.md` (new "Model reliability and Splunk payment signals" subsection), `scripts/loadgen.sh` (restore logic). No core agent/trigger/verification edits beyond the reason strings. `verify compounding-error` still returns Galileo PASS + Splunk UNVERIFIED (with the updated reason text). `scripts/loadgen.sh restore` now prints accurate success messaging when the container is up.
+
+---
+
+## 2026-06-18 — Per-scenario quiet background traffic toggle
+
+**What:** Added a `quiet_background` toggle to the scenario manifest and wired it into the CLI so the control plane can drain and restore the Astronomy Shop's Locust load-generator around agent runs. Created `scripts/loadgen.sh` as the helper.
+
+**Why:** In V2 ("The Compounding Error"), the load-generator's 5-user continuous checkout/payment traffic masks the agent's single failing checkout in Splunk APM — the payment error spike is invisible among hundreds of successful requests per minute. V1 ("The Invisible Failure") and V3 ("The Firewall") deliberately keep live traffic because their punchline depends on "infra stays green" being meaningful; V4 ("Trust the Judge") also keeps traffic (eval-accuracy, not infrastructure-scoped). Only V2 needs a quiet window for clean agent-attributable APM attribution.
+
+**Decisions / trade-offs:**
+- **Locust web API as primary control** (POST `/stop` and `/swarm`) — runtime-only, no container restart, no warm-up delay. Reached via `docker compose exec` (compose network, no host-port assumption). Fallback: `docker compose stop/start` (preserves the container; ~30-60s warm-up).
+- **ALWAYS restore on reset** — `cmd_reset` calls `loadgen.sh restore` unconditionally (idempotent), so the generator is never left drained even if play was interrupted or a different scenario was played next.
+- **Safe no-op when stage is down** — the script checks Docker, the daemon, the demo dir, and the container state, exiting 0 with a message at each gate. Never crashes play/reset.
+- **Not a trigger** — this is a scenario-level operational concern (compose-network control of a non-agent service), not one of the four fixed fault-injection mechanisms. Handled by the CLI around play/reset, independent of the trigger system.
+- **Only compounding-error sets it** — the other three core vignettes default to `false` (omitted from their manifests).
+
+**Effect on codebase / UX:** New `scripts/loadgen.sh` (bash, executable). `control_plane/manifest.py` gains `quiet_background: bool` field (optional, default `false`) with validation. `control_plane/cli.py` drains on `play` (when flag set), restores on every `reset`, shows status in `list`. `scenarios/compounding-error/scenario.yaml` adds `quiet_background: true` with a comment. Docs updated: `CHANGELOG.md`, `control_plane/README.md`, `scenarios/README.md`, and this journal. No core agent/trigger/verification edits.
+
+---
+
 ## 2026-06-18 — Web-interface decisions W1–W7 signed off
 
 **What:** Reconciled [`docs/web-interface-plan.md`](web-interface-plan.md) to record the user's
@@ -431,3 +482,77 @@ entry — there is no user-facing change yet. No application code or config touc
 - **Minimal, interface-consistent changes:** kept the per-backend `SignalVerifier` contract; `attested`/`unverifiable` both do not fail the run; CLI gained an `ATTESTED` glyph, an attested count, and multi-line detail indentation. Did NOT touch `trigger.ref` (`productCatalogFailure` stays) and did NOT alter the `expected_signals` lists.
 
 **Effect on codebase / UX:** Changed `control_plane/verification/{base,galileo_verifier,splunk_verifier}.py` and `control_plane/cli.py`. `verify invisible-failure` now reports `context_adherence_low` PASS (context_adherence [894d889a] worst 0.000 < 0.500), `ungrounded_claim` PASS (completeness [4f27c2bc] worst 0.000 < 0.500), and `apm_all_green` ATTESTED with the concierge-scoped evidence inline. No secrets printed; no commit made.
+
+---
+
+## 2026-06-18 — Phase 5: ship Vignettes 2, 3, 4 (remaining core vignettes)
+
+**What:** Authored and live-verified three new vignettes — "The Compounding Error" (V2), "The Firewall" (V3), and "Trust the Judge" (V4) — as drop-in scenario folders, completing the Core 4 demo library.
+
+**Why:** Phase 5 is the completion of the demo's vignette library (design §6). Each vignette exercises a distinct reliability pillar (error-compounding, guardrail-control, eval-accuracy) and proves the Phase-3 harness contract: vignettes are pluggable folders that never require core edits.
+
+**Decisions / trade-offs:**
+- **V2 (Compounding Error):** Used `tool_fault` on `add_to_cart` with `mode=error` and a 503 timeout message. The agent hit the fault, attempted both products, and reported the failure. This exercises the multi-step cascade story; Galileo's `tool_selection_quality` scored 0.000 (worst) across the traces. The `tool_error` signal was UNVERIFIED because the `tool_error_rate` / `action_advancement` scorers are not yet enabled on the Galileo log stream (a configuration step, not a code gap).
+- **V3 (The Firewall):** Used `prompt_overlay` with a crafted injection payload containing (a) a jailbreak attempt ("IGNORE PREVIOUS INSTRUCTIONS") and (b) fake PII. The agent did NOT comply with the jailbreak — it gave a normal response. Galileo's `prompt_injection` / `input_pii` scorers were UNVERIFIED because they need to be enabled in the Galileo project's scorer config. Once enabled, they evaluate the trace context and detect both threats. The agent's resistance to the jailbreak is independent of the scorer — it shows the model's inherent safety while Galileo's guardrails add an explicit detection layer.
+- **V4 (Trust the Judge) — harness-mapping assessment (DESIGN QUESTION):** This vignette is fundamentally an offline eval / Galileo Experiments contrast, NOT a live runtime fault. It does NOT map cleanly onto the four fixed live triggers because those induce runtime behaviour changes, while this replays a static eval set. I used `prompt_overlay` as a lightweight hook (injecting an "eval-driver" instruction), which WORKS (traces are generated, scorers evaluate them, `context_adherence_low` + `ungrounded_claim` both PASS) but is a square-peg/round-hole fit. The full contrast experience (naive-judge vs. Luna-2 side-by-side in Galileo Experiments) likely needs either: (a) a dedicated `scripts/run-eval.sh` calling the Galileo Experiments API directly (keeps trigger set fixed — recommended), or (b) a 5th trigger type `eval_set` (scope-creep risk per Phase-3 risk note). Recommending option (a) to the parent.
+- **Splunk verifier extension:** Added per-signal unverified reasons (`checkout_latency_spike`, `checkout_error_spike`, `apm_normal_footprint`) with specific guidance for the operator/MCP attestation check. No attestation evidence embedded yet — awaiting parent MCP confirmation.
+- **No core edits:** The harness, triggers, agent, and CLI were unchanged. All three vignettes registered via auto-discovery. Verified: `control-plane.sh list` shows 8 scenarios (3 new + 1 reference + 4 stubs).
+- **Serialized stage usage:** All play/verify/reset cycles ran serially against the single stage, each resetting before the next. Stage confirmed clean (no overlay state) after all runs.
+
+**Effect on codebase / UX:** Added `scenarios/compounding-error/`, `scenarios/firewall/`, and `scenarios/trust-the-judge/` (each with scenario.yaml, reset.sh, captions). Extended `control_plane/verification/splunk_verifier.py` with 3 new signal-specific unverified reasons. Live verification: V2 `tool_selection_quality_low` PASS; V3 `prompt_injection_detected` UNVERIFIED (scorer not enabled); V4 `context_adherence_low` PASS + `ungrounded_claim` PASS. No failures. No secrets printed; no commit made; plan checkboxes untouched.
+
+---
+
+## 2026-06-18 — Post-Phase-5 decisions: V2 re-scope, V3 attestation, V4 note, deferred work
+
+**What:** Applied four user decisions from the Phase-5 verification review: (1) re-scoped V2 "The Compounding Error" from `tool_fault` to `feature_flag` using the demo's `cartFailure` flag so Splunk APM lights up; (2) embedded V3's `apm_normal_footprint` attestation; (3) documented V4's incompleteness in the caption; (4) recorded deferred items (trace under-export, scorer enablement).
+
+**Why:** The parent verified live that V2's prior `tool_fault` approach was INVISIBLE in Splunk APM (the agent-side fault never reached the store services; only the top-level LangGraph span appeared, 0 errors, cart/checkout flat). The whole point of V2 is to be the vignette where Splunk lights up — the inverse of V1. The fix: fault the REAL store service via its flagd feature flag (`cartFailure`), which the agent's `add_to_cart` tool hits through the frontend-proxy (`POST /api/cart`), creating genuine errors/latency on the `cartservice` that APM renders.
+
+**Decisions / trade-offs:**
+- **V2 re-scope (Decision 1):** Switched `trigger.type` from `tool_fault` to `feature_flag`, `trigger.ref` from `add_to_cart` to `cartFailure`. Verified the wiring: `agent/tools.py` → `add_to_cart` calls `store.add_to_cart()` → `StoreClient.add_to_cart()` → `POST /api/cart` through the frontend-proxy → the demo's `cartservice`, which is the service the `cartFailure` flagd flag breaks. The fault propagates end-to-end: flagd → cartservice → frontend-proxy → agent tool result → Galileo trace. Updated `scenario.yaml`, `reset.sh`, and the caption talk-track. Removed the `tool_fault`-specific params (`mode`, `message`), kept `drive_prompt`. Splunk signals (`checkout_latency_spike`, `checkout_error_spike`) remain unverified (ingest-only token); the unverified guidance text was updated to reference `cartservice`.
+- **V3 attestation (embedded):** The parent confirmed V3's `apm_normal_footprint` via the Splunk APM o11y MCP on 2026-06-18. Embedded as an `attested` entry in `splunk_verifier.py` (same pattern as V1's `apm_all_green`). `verify firewall` will now return `attested` for this signal.
+- **V4 caption note (Decision 3):** Added a clearly-marked "Implementation completeness note" to `scenarios/trust-the-judge/captions/trust-the-judge.md` documenting: what is shipped (curated eval set + prompt_overlay traces + live verification), what remains (a `scripts/run-eval.sh` calling the Galileo Experiments API for the side-by-side judge-accuracy contrast), and the recommended approach. No code changes to the vignette itself.
+- **Deferred: Splunk trace under-export + span gap (Decision 2):** NOT investigated in this session. The parent observed ~3 traces reaching Splunk vs ~40 expected, and not all AI functionality surfaces as Splunk spans. Both are recorded here as known limitations for later investigation.
+- **Deferred: Galileo scorer enablement (Decision 4):** The `tool_error` signal (V2) and `prompt_injection_detected` signal (V3) remain authored as-is. They report UNVERIFIED because the corresponding Galileo scorers (`tool_error_rate`/`action_advancement` for V2, `prompt_injection`/`input_pii` for V3) are not yet enabled on the Galileo project's log stream. The USER will enable them; the parent will re-verify afterward. The signals are NOT swapped to other scorers.
+
+**Known limitations / to investigate (deferred):**
+- (a) Agent traces under-export to the Splunk collector: ~3 traces observed in Splunk where ~40+ were expected. Root cause deferred.
+- (b) Not all AI functionality is currently surfacing as Splunk spans — the concierge shows only the top-level `invoke_agent LangGraph` span in some runs, not the full tool-call tree. Root cause deferred.
+
+**Effect on codebase / UX:** Updated `scenarios/compounding-error/` (scenario.yaml, reset.sh, captions). Updated `control_plane/verification/splunk_verifier.py` (V3 attestation embedded; V2 unverified text updated to reference cartservice). Updated `scenarios/trust-the-judge/captions/trust-the-judge.md` (incompleteness note appended). No core edits. No commit made; plan checkboxes untouched.
+
+---
+
+## 2026-06-18 — Phase 5 hardening: V2 fault path, verifier direction fix, firewall injection channel
+
+**What:** Three hardening fixes from live testing: (1) switched V2 from `cartFailure` to `paymentFailure` with a new checkout tool, (2) fixed the Galileo verifier's per-signal direction/threshold/aggregation, (3) reworked the firewall injection delivery for scorer detection via dual-channel (system prompt + RAG knowledge overlay).
+
+**Why:** Live testing revealed three gaps: (a) `cartFailure` only breaks EmptyCart, not AddItem — the agent's add-to-cart path never hit the fault, so no APM signal; (b) the verifier used a single 0.5 threshold for all signals including `tool_error` (where any error should fire) and printed misleading "worst" labels for max-aggregated signals; (c) Galileo's `prompt_injection` scorer scored 0 on every firewall trace because it evaluates conversation INPUT messages, not the hidden system prompt — the prior delivery only seeded the system prompt.
+
+**Decisions / trade-offs:**
+- **V2 fault choice:** `paymentFailure` (variant "100%") breaks the payment service charge during checkout. This requires the agent to have a `checkout` tool. Added minimal `place_order()` to `StoreClient` + `checkout` tool to `tools.py`. The demo's checkout API (`POST /api/checkout`) requires a shipping address + credit card — using synthetic/deterministic test values. The payment service is a Node.js service that checks the flagd `paymentFailure` flag on every charge — confirmed from source.
+- **Verifier design:** Each `_SignalSpec` now carries `direction` (low/high/detect), `aggregation` (min/max), and `threshold_key` (env-var name). Thresholds: LOW=0.5 (unchanged), HIGH=0.0 (any error fires — defensible because tool_error_rate > 0 indicates the tool failed at least once), DETECT=max>=1 (any positive detection). Configurable via `GALILEO_METRIC_HIGH_THRESHOLD` env var for operators who want a higher bar.
+- **Firewall dual-channel:** Modified `prompt_overlay` trigger to write the payload to BOTH `prompt_overlay.txt` AND `knowledge/<scenario-id>-overlay.md`. The RAG retriever's keyword matching picks up the heading-structured document when the user asks about the Starsense telescope. The scorer now evaluates the injection as a tool output in the conversation. This stays within the `prompt_overlay` trigger type (no 5th type added). Payload restructured with markdown headings for RAG chunk matching.
+- **Trigger set preserved:** Still exactly 4 types (feature_flag, rag_corpus, tool_fault, prompt_overlay).
+
+**Effect on codebase / UX:** `agent/tools.py` (+checkout), `agent/store_client.py` (+place_order), `control_plane/verification/galileo_verifier.py` (direction/threshold refactor), `control_plane/verification/splunk_verifier.py` (payment_* signals), `control_plane/triggers/prompt_overlay.py` (dual-channel write+reset), `scenarios/compounding-error/*` (paymentFailure, checkout flow), `scenarios/firewall/*` (restructured payload, dual-channel caption+reset). No commit made; plan checkboxes untouched.
+
+---
+
+## 2026-06-18 — Phase 5 hardening: V3 switch to PII detection, V2 checkout cart fix
+
+**What:** Two design-gap fixes from live Galileo/Splunk validation: (1) switched V3 Firewall's verified signal from `prompt_injection_detected` to `pii_exposed` (PII detection scorer), (2) fixed V2's agent checkout path so the cart is populated before checkout, ensuring the payment service Charge is actually exercised.
+
+**Why:** Live validation revealed two gaps:
+- **V3 (Firewall):** Galileo's `prompt_injection` scorer evaluates the **user-input turn**, not retrieved RAG content or tool outputs. The firewall payload is delivered dual-channel (system prompt + RAG knowledge overlay), so the PII enters the conversation via a tool-result message — a channel the `prompt_injection` scorer doesn't inspect. The scorer returned 0 on all traces. PII scorers (`input_pii`, `pii`, `output_pii`, etc.) evaluate the full conversation content where the sensitive data (SSN 078-05-1120, credit card 4532-0123-4567-8901, DOB, email) actually lands.
+- **V2 (Compounding Error):** Splunk APM showed zero agent traffic on `checkout` (grpc.oteldemo.CheckoutService/PlaceOrder) and `payment` (grpc.oteldemo.PaymentService/Charge) — only load-generator traffic with 100% success. The agent's checkout never reached the gRPC services. The Galileo `tool_error` PASS was "right answer, wrong reason" — the tool errored at the HTTP/frontend layer (empty cart), not from the `paymentFailure` flag. The root cause: the agent's cart was empty at checkout time, so the checkout either bypassed the payment service entirely or errored before reaching it.
+
+**Decisions / trade-offs:**
+- **V3 signal switch:** Added `pii_exposed` to `_SIGNAL_MAP` as a `detect/max` signal mapping to a generous tuple of plausible Galileo PII scorer names: `(input_pii, pii, output_pii, pii_luna, input_pii_luna)`. Narrowed `prompt_injection_detected` to only contain `(prompt_injection, prompt_injection_luna)` — removed `input_pii` from it since PII detection is now a separate signal. The firewall scenario.yaml switches from `prompt_injection_detected` to `pii_exposed`. Caption reframed: the story is now "a poisoned knowledge-base document smuggles sensitive PII into the agent's context via retrieval; Galileo's PII guardrail detects the sensitive-data exposure that Splunk APM cannot see."
+- **V3 PII scorer caveat:** A PII scorer may not be enabled on the Galileo project/log stream. The verifier resolves scorer names→UUIDs via `Scorers().list()` and reports `unverifiable` if no matching scorer produced values. If validation comes back `unverifiable`, the user must enable a PII scorer in Galileo — the same enablement step required for other scorers. Documented in the caption and this entry.
+- **V2 cart pre-check:** `store_client.py` `place_order()` now calls `get_cart()` before `POST /api/checkout` and raises `StoreError` if the cart is empty. This catches the empty-cart condition early with a clear error message rather than silently posting an empty checkout. The `add_to_cart` tool now warns if the cart appears empty after the add call. The checkout tool docstring clarifies the cart-non-empty prerequisite.
+- **V2 drive_prompt:** Strengthened to explicitly number the steps: "(1) search for it in the catalog to get the product id and price, (2) add it to my cart using the product id you found, (3) check out to complete my purchase." This increases reliability of the search→add→checkout sequence across different model sizes/providers.
+- **Trigger set preserved:** Still exactly 4 types (feature_flag, rag_corpus, tool_fault, prompt_overlay). No 5th type added.
+
+**Effect on codebase / UX:** `control_plane/verification/galileo_verifier.py` (added `pii_exposed` signal, narrowed `prompt_injection_detected`, updated docstring table+note). `scenarios/firewall/scenario.yaml` (signal→`pii_exposed`, header comment reframed). `scenarios/firewall/captions/firewall.md` (full rewrite for PII-detection narrative). `agent/store_client.py` (`place_order` cart pre-check). `agent/tools.py` (`add_to_cart` empty-cart warning, `checkout` docstring). `scenarios/compounding-error/scenario.yaml` (drive_prompt numbered steps). `scenarios/compounding-error/captions/compounding-error.md` (updated prompt+card). No commit made; plan checkboxes untouched.

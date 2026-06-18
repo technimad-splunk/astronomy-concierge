@@ -64,8 +64,51 @@ _UNVERIFIABLE_REASON = (
     "MCP/UI check). Confirm in Splunk Observability APM via the o11y MCP."
 )
 
+_PAYMENT_LATENCY_SPIKE_UNVERIFIED = (
+    "unverified — requires the agent to complete a REAL checkout that reaches "
+    "the payment service. This needs a tool-reliable model (e.g. gpt-4o-mini "
+    "or qwen2.5:14b-instruct); on the default llama3.1:8b the agent may emit "
+    "malformed tool calls and never complete checkout. When running on a "
+    "capable model, attest elevated paymentservice latency in Splunk APM "
+    "out-of-band (ingest-only token; no CLI query)."
+)
+
+_PAYMENT_ERROR_SPIKE_UNVERIFIED = (
+    "unverified — requires the agent to complete a REAL checkout that reaches "
+    "the payment service. This needs a tool-reliable model (e.g. gpt-4o-mini "
+    "or qwen2.5:14b-instruct); on the default llama3.1:8b the agent may emit "
+    "malformed tool calls and never complete checkout. When running on a "
+    "capable model, attest paymentservice error spikes in Splunk APM "
+    "out-of-band (ingest-only token; no CLI query)."
+)
+
+_APM_NORMAL_FOOTPRINT_UNVERIFIED = (
+    "unverified (ingest-only token; needs operator/MCP check). Confirm in "
+    "Splunk APM that the astronomy-concierge service shows a normal "
+    "operational footprint (no latency/error anomaly) during the firewall "
+    "vignette run — the guardrail fires at the LLM-evaluation layer, not "
+    "the infrastructure layer."
+)
+
+_APM_NORMAL_FOOTPRINT_ATTESTATION = (
+    "Operator-attested via Splunk APM o11y MCP on 2026-06-18 "
+    "(env local-agent-galileo, eu0): during the Firewall vignette run, "
+    "astronomy-concierge showed health=Ok, errorCount=0, baseline latency, "
+    "and all store services nominal — no latency/error anomaly. Confirms "
+    "the guardrail fires at the LLM-evaluation layer, not the "
+    "infrastructure layer. Not auto-queryable from the CLI (ingest-only token)."
+)
+
 _ATTESTATIONS: dict[str, str] = {
     "apm_all_green": _APM_ALL_GREEN_ATTESTATION,
+    "apm_normal_footprint": _APM_NORMAL_FOOTPRINT_ATTESTATION,
+}
+
+
+# Per-signal unverified reasons (specific guidance for operator/MCP checks).
+_SIGNAL_REASONS: dict[str, str] = {
+    "payment_latency_spike": _PAYMENT_LATENCY_SPIKE_UNVERIFIED,
+    "payment_error_spike": _PAYMENT_ERROR_SPIKE_UNVERIFIED,
 }
 
 
@@ -86,5 +129,6 @@ class SplunkVerifier(SignalVerifier):
             if attestation is not None:
                 results.append(SignalResult("splunk", s, "attested", attestation))
             else:
-                results.append(SignalResult("splunk", s, "unverifiable", _UNVERIFIABLE_REASON))
+                reason = _SIGNAL_REASONS.get(s, _UNVERIFIABLE_REASON)
+                results.append(SignalResult("splunk", s, "unverifiable", reason))
         return results

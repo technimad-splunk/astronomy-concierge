@@ -15,7 +15,13 @@ Named-signal → scorer mapping (demo-design §6/Appendix A):
 | ``ungrounded_claim``        | completeness(_luna), chunk_attribution_*        | value < thr  |
 | ``tool_selection_quality_low`` | tool_selection_quality                      | value < thr  |
 | ``tool_error``              | tool_error_rate, action_advancement             | value > thr  |
-| ``prompt_injection_detected`` | prompt_injection, input_pii, pii              | flag truthy  |
+| ``prompt_injection_detected`` | prompt_injection, prompt_injection_luna        | flag truthy  |
+| ``pii_exposed``             | input_pii, pii, output_pii, pii_luna, input_pii_luna | flag truthy  |
+
+Note: ``prompt_injection_detected`` scopes to the user-input turn (not retrieved
+RAG content or system-prompt overlays). For payloads delivered via RAG/tool output,
+use ``pii_exposed`` which targets the PII scorers that evaluate retrieved/conversation
+content where the sensitive data actually lands.
 
 **UUID → scorer-name resolution.** Galileo returns each trace's scorer metrics
 keyed by the scorer's **UUID**, not its human name — e.g. ``context_adherence``'s
@@ -28,10 +34,17 @@ looks each signal's scorer up by BOTH its name and its resolved UUID, scanning
 the value-bearing sub-keys (plain value, ``@average``/``@min``/``@max``,
 ``_multijudge_average``) that Galileo attaches per scorer.
 
-``thr`` is ``GALILEO_METRIC_LOW_THRESHOLD`` (default 0.5). For a "low" signal the
-WORST (minimum) observed value across recent traces is compared to ``thr``, so a
-single dropped trace fires the signal. Unknown signals are reported
-``unverifiable`` (not failed), so the hook stays honest about coverage.
+Each signal has an explicit **direction**, **aggregation**, and **threshold**:
+
+- ``low`` signals (quality metrics): fire when ``MIN(values) < threshold``.
+  Threshold: ``GALILEO_METRIC_LOW_THRESHOLD`` (default 0.5).
+- ``high`` signals (error metrics): fire when ``MAX(values) > threshold``.
+  Threshold: ``GALILEO_METRIC_HIGH_THRESHOLD`` (default 0.0 — any error fires).
+- ``detect`` signals (boolean/detection): fire when ``MAX(values) >= 1``
+  (any trace has a positive detection).
+
+Unknown signals are reported ``unverifiable`` (not failed), so the hook stays
+honest about coverage.
 """
 
 from __future__ import annotations
@@ -50,27 +63,48 @@ if TYPE_CHECKING:
 @dataclass(frozen=True)
 class _SignalSpec:
     scorer_names: tuple[str, ...]
-    direction: str  # "low" (value < thr fires) | "high" (value > thr fires) | "flag"
+    direction: str  # "low" | "high" | "detect"
+    aggregation: str  # "min" | "max"
+    threshold_key: str  # env-var name for the threshold
 
 
-# Map our named signals to Galileo scorer names + the direction that "fires".
+# Map our named signals to Galileo scorer names + direction/aggregation/threshold.
 # Names are resolved to per-project scorer UUIDs at verify time (see module doc).
+#
+# direction + aggregation semantics:
+#   low/min  — quality signal: fire when MIN(values) < threshold (one bad trace)
+#   high/max — error signal: fire when MAX(values) > threshold (any elevated error)
+#   detect/max — boolean/detection: fire when MAX(values) >= 1 (any positive hit)
 _SIGNAL_MAP: dict[str, _SignalSpec] = {
     "context_adherence_low": _SignalSpec(
         ("context_adherence", "context_adherence_luna", "context_adherence_plus", "groundedness"),
-        "low",
+        "low", "min", "GALILEO_METRIC_LOW_THRESHOLD",
     ),
     "ungrounded_claim": _SignalSpec(
         ("completeness", "completeness_luna", "chunk_attribution_utilization",
          "chunk_attribution_utilization_luna"),
-        "low",
+        "low", "min", "GALILEO_METRIC_LOW_THRESHOLD",
     ),
     "tool_selection_quality_low": _SignalSpec(
-        ("tool_selection_quality", "tool_selection_quality_luna"), "low"
+        ("tool_selection_quality", "tool_selection_quality_luna"),
+        "low", "min", "GALILEO_METRIC_LOW_THRESHOLD",
     ),
-    "tool_error": _SignalSpec(("tool_error_rate", "tool_error_rate_luna", "action_advancement"), "high"),
+    "tool_error": _SignalSpec(
+        ("tool_error_rate", "tool_error_rate_luna", "action_advancement"),
+        "high", "max", "GALILEO_METRIC_HIGH_THRESHOLD",
+    ),
     "prompt_injection_detected": _SignalSpec(
-        ("prompt_injection", "prompt_injection_luna", "input_pii"), "flag"
+        ("prompt_injection", "prompt_injection_luna"),
+        "detect", "max", "",
+    ),
+    "pii_exposed": _SignalSpec(
+        # Real Galileo PII scorer names (confirmed via Scorers().list()): the Luna
+        # variants (input_pii/output_pii) and the GPT variants (input_pii_gpt/
+        # output_pii_gpt). We match whichever is enabled on the log stream. input_*
+        # comes first because the poisoned PII arrives as retrieved/tool content in
+        # the conversation INPUT, which the input PII scorers evaluate.
+        ("input_pii", "input_pii_gpt", "output_pii", "output_pii_gpt"),
+        "detect", "max", "",
     ),
 }
 
@@ -83,12 +117,21 @@ _VALUE_SUFFIXES = ("", "@average", "@min", "@max", "_multijudge_average")
 
 _TRUE = {"1", "true", "yes", "on"}
 
+# Default thresholds:
+#   LOW  = 0.5 — quality signals fire when a value drops below this
+#   HIGH = 0.0 — error signals fire when a value exceeds this (any error fires)
+_DEFAULT_LOW_THRESHOLD = 0.5
+_DEFAULT_HIGH_THRESHOLD = 0.0
 
-def _threshold() -> float:
+
+def _get_threshold(env_key: str, default: float) -> float:
+    raw = os.getenv(env_key)
+    if raw is None:
+        return default
     try:
-        return float(os.getenv("GALILEO_METRIC_LOW_THRESHOLD", "0.5"))
+        return float(raw)
     except ValueError:
-        return 0.5
+        return default
 
 
 def _coerce_number(value: Any) -> float | None:
@@ -96,6 +139,11 @@ def _coerce_number(value: Any) -> float | None:
         return 1.0 if value else 0.0
     if isinstance(value, (int, float)):
         return float(value)
+    if isinstance(value, list):
+        # Entity/PII scorers (input_pii/output_pii/_gpt) emit a LIST of detected
+        # entity types (e.g. ['ssn','email']), empty when nothing is found. Treat
+        # the magnitude as the count so a non-empty list reads as a detection.
+        return float(len(value))
     if isinstance(value, dict):
         for key in ("value", "score", "result"):
             if key in value:
@@ -176,11 +224,10 @@ class GalileoVerifier(SignalVerifier):
         # back to name-only matching (still correct for name-keyed metrics).
         name_to_id = self._scorer_name_to_id()
 
-        thr = _threshold()
         n = len(records)
         results: list[SignalResult] = []
         for signal in signals:
-            results.append(self._check_signal(signal, seen, name_to_id, thr, n))
+            results.append(self._check_signal(signal, seen, name_to_id, n))
         return results
 
     @staticmethod
@@ -213,7 +260,6 @@ class GalileoVerifier(SignalVerifier):
         signal: str,
         seen: dict[str, list[float]],
         name_to_id: dict[str, str],
-        thr: float,
         n_traces: int,
     ) -> SignalResult:
         spec = _SIGNAL_MAP.get(signal)
@@ -222,9 +268,50 @@ class GalileoVerifier(SignalVerifier):
                 "galileo", signal, "unverifiable",
                 "no scorer mapping for this signal yet (needs Phase-4 scorer config).",
             )
+
+        # Resolve the threshold for this signal's direction.
+        if spec.direction == "low":
+            thr = _get_threshold(spec.threshold_key, _DEFAULT_LOW_THRESHOLD)
+        elif spec.direction == "high":
+            thr = _get_threshold(spec.threshold_key, _DEFAULT_HIGH_THRESHOLD)
+        else:
+            thr = 1.0  # detect: any positive hit (>= 1)
+
+        # Detection signals (e.g. PII) may be served by SEVERAL scorers at once
+        # (input_pii AND output_pii) and a given scorer can be present-but-empty
+        # on a trace (e.g. input_pii == [] while output_pii caught the leak).
+        # Union values across ALL mapped scorers and fire if ANY of them detected
+        # something — never early-return on the first present-but-empty scorer.
+        if spec.direction == "detect":
+            all_values: list[float] = []
+            hit: list[str] = []
+            for scorer_name in spec.scorer_names:
+                uuid = name_to_id.get(scorer_name.lower())
+                bases = [scorer_name] + ([uuid] if uuid else [])
+                vals: list[float] = []
+                for base in bases:
+                    vals.extend(self._collect_values(base, seen))
+                if vals:
+                    all_values.extend(vals)
+                    if max(vals) >= 1.0:
+                        hit.append(scorer_name)
+            if not all_values:
+                return SignalResult(
+                    "galileo", signal, "unverifiable",
+                    f"none of scorers {list(spec.scorer_names)} present on {n_traces} "
+                    "recent trace(s) (by name or resolved UUID); enable the scorer on "
+                    "the log stream and run the vignette.",
+                )
+            agg_val = max(all_values)
+            fired = agg_val >= 1.0
+            where = f"detected by {hit}" if fired else "no detections"
+            return SignalResult(
+                "galileo", signal, "pass" if fired else "fail",
+                f"{where}: peak {agg_val:.0f} >= 1 across {list(spec.scorer_names)} "
+                f"over {len(all_values)} value(s) in {n_traces} trace(s).",
+            )
+
         for scorer_name in spec.scorer_names:
-            # Look the scorer up by BOTH its name and its resolved UUID — Galileo
-            # keys scored metrics by UUID, session-level ones by name.
             base_keys = [scorer_name]
             uuid = name_to_id.get(scorer_name.lower())
             if uuid:
@@ -237,21 +324,24 @@ class GalileoVerifier(SignalVerifier):
 
             uuid_note = f" [{uuid[:8]}]" if uuid else ""
             if spec.direction == "low":
-                worst = min(values)
-                fired = worst < thr
-                cmp = f"{worst:.3f} < {thr:.3f}"
+                agg_val = min(values)
+                fired = agg_val < thr
+                agg_label = "min"
+                cmp = f"{agg_val:.3f} < {thr:.3f}"
             elif spec.direction == "high":
-                worst = max(values)
-                fired = worst > thr
-                cmp = f"{worst:.3f} > {thr:.3f}"
-            else:  # flag
-                worst = max(values)
-                fired = worst >= 1.0
-                cmp = f"{worst:.0f} >= 1"
+                agg_val = max(values)
+                fired = agg_val > thr
+                agg_label = "peak"
+                cmp = f"{agg_val:.3f} > {thr:.3f}"
+            else:  # detect
+                agg_val = max(values)
+                fired = agg_val >= 1.0
+                agg_label = "max"
+                cmp = f"{agg_val:.0f} >= 1"
             status = "pass" if fired else "fail"
             return SignalResult(
                 "galileo", signal, status,
-                f"scorer '{scorer_name}'{uuid_note} worst {cmp} over "
+                f"scorer '{scorer_name}'{uuid_note} {agg_label} {cmp} over "
                 f"{len(values)} value(s) in {n_traces} trace(s).",
             )
 

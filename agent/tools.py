@@ -123,11 +123,17 @@ def make_tools(store: StoreClient) -> list[BaseTool]:
         except StoreError as exc:
             return f"Error: {exc}"
         items = cart.get("items", [])
+        if not items:
+            return (
+                f"Warning: add_to_cart call returned OK but the cart appears "
+                f"empty. The item may not have been added. Try again with a "
+                f"valid product id from search_products."
+            )
         summary = ", ".join(
             f"{it.get('quantity', 0)}x {it.get('product', {}).get('name', it.get('productId'))}"
             for it in items
         )
-        return f"Added. Cart now contains: {summary or 'nothing'}."
+        return f"Added. Cart now contains: {summary}."
 
     @tool
     def view_cart() -> str:
@@ -149,6 +155,23 @@ def make_tools(store: StoreClient) -> list[BaseTool]:
         return "Cart contents:\n" + "\n".join(lines)
 
     @tool
+    def checkout() -> str:
+        """Place an order for everything currently in the cart. This completes the
+        purchase (processes payment and shipping). The cart MUST contain items
+        before calling this — use add_to_cart first. If checkout fails (e.g. a
+        payment error), report the error to the user."""
+        try:
+            result = store.place_order()
+        except StoreError as exc:
+            return f"Error: {exc}"
+        order_id = result.get("orderId", "unknown")
+        shipping = result.get("shippingTrackingId", "")
+        msg = f"Order placed successfully! Order ID: {order_id}"
+        if shipping:
+            msg += f", Tracking: {shipping}"
+        return msg
+
+    @tool
     def list_currencies() -> str:
         """List the currency codes the store supports."""
         try:
@@ -164,6 +187,7 @@ def make_tools(store: StoreClient) -> list[BaseTool]:
         get_recommendations,
         add_to_cart,
         view_cart,
+        checkout,
         list_currencies,
     ]
     return _apply_tool_faults(all_tools)

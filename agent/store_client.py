@@ -142,3 +142,47 @@ class StoreClient:
             "/api/cart",
             {"userId": self.session_id, "item": {"productId": pid, "quantity": qty}},
         )
+
+    def place_order(
+        self,
+        email: str = "concierge-shopper@example.com",
+        currency: str | None = None,
+    ) -> dict[str, Any]:
+        """Place an order (checkout) for everything currently in the cart.
+
+        Calls ``POST /api/checkout`` with the session's userId, a synthetic
+        shipping address and credit card (the demo validates format, not real
+        payment). This exercises the full checkout→payment service path so
+        flagd faults on the payment service propagate into the agent's flow.
+
+        Verifies the cart is non-empty before calling checkout — an empty cart
+        would bypass the payment service entirely (charging $0 shipping) and
+        the ``paymentFailure`` flag would never fire.
+        """
+        cur = _validate_currency(currency)
+        cart = self.get_cart(currency=cur)
+        items = cart.get("items", [])
+        if not items:
+            raise StoreError(
+                "Cart is empty — nothing to check out. Add items with "
+                "add_to_cart before calling checkout."
+            )
+        body = {
+            "userId": self.session_id,
+            "email": email,
+            "userCurrency": cur,
+            "address": {
+                "streetAddress": "1600 Amphitheatre Parkway",
+                "city": "Mountain View",
+                "state": "CA",
+                "country": "US",
+                "zipCode": "94043",
+            },
+            "creditCard": {
+                "creditCardNumber": "4432801561520454",
+                "creditCardCvv": 672,
+                "creditCardExpirationYear": 2030,
+                "creditCardExpirationMonth": 1,
+            },
+        }
+        return self._post("/api/checkout", body, params={"currencyCode": cur})

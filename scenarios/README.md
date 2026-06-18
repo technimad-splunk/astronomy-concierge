@@ -20,6 +20,7 @@ Each vignette ships a manifest the registry auto-discovers
 | `expected_signals` | The Galileo + Splunk signals the vignette promises will fire — used for auto-verification. |
 | `talk_track` | Path (relative to the scenario folder) to the SE caption / talk-track file. |
 | `reset` | Path to the per-scenario reset script that restores baseline. |
+| `quiet_background` | *(optional, default `false`)* When `true`, the CLI drains the demo's Locust load-generator before driving the agent and restores it on reset — useful when background traffic would mask the agent's APM signal. |
 
 ## The four fixed trigger types
 

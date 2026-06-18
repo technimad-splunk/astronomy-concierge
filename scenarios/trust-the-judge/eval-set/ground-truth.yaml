@@ -1,0 +1,112 @@
+# scenarios/trust-the-judge/eval-set/ground-truth.yaml
+#
+# Curated evaluation set with KNOWN ground truth for the "Trust the Judge"
+# vignette. Each case has a user query, the agent's response, a reference
+# answer (the ground truth), and the correct quality label.
+#
+# The claim: a naive single LLM-as-judge mislabels ~1 in 3 of these cases,
+# while Galileo's Luna-2 / consensus evaluators agree with ground truth.
+#
+# These cases are designed to be adversarial for naive judges — they exploit
+# common failure modes of single-LLM evaluation:
+#   - Partially correct responses (naive judge gives full credit)
+#   - Confidently-wrong responses (style bias: sounds good → scores high)
+#   - Correct but hedged responses (naive judge penalizes uncertainty)
+#   - Subtle factual errors in otherwise-good responses
+
+cases:
+  - id: "eval-001"
+    query: "What is the magnification of the Roof Binoculars?"
+    agent_response: "The Roof Binoculars offer 10x magnification with a 42mm objective lens, making them perfect for astronomy beginners."
+    reference: "The Roof Binoculars have 10x magnification with 42mm objectives."
+    ground_truth_label: "correct"
+    naive_judge_trap: null
+    notes: "Straightforward correct answer — both judges should agree."
+
+  - id: "eval-002"
+    query: "What is the return policy for telescopes?"
+    agent_response: "You can return any telescope within 60 days for a full refund, no questions asked, as long as it's in the original packaging."
+    reference: "Returns are accepted within 30 days of purchase with original packaging and receipt. Refund is processed within 5-7 business days."
+    ground_truth_label: "incorrect"
+    naive_judge_trap: "confidence_bias"
+    notes: "Wrong return window (60 vs 30 days) and wrong terms (no questions asked vs receipt required). Stated confidently — naive judges often score confident-sounding wrong answers higher."
+
+  - id: "eval-003"
+    query: "Can the Solar System Color Imager capture images of deep-sky objects?"
+    agent_response: "While the Solar System Color Imager is primarily designed for planetary imaging, it may be possible to capture some brighter deep-sky objects, though the results would likely be suboptimal compared to a dedicated deep-sky camera. I'd recommend checking the manufacturer's specifications for confirmed capabilities."
+    reference: "The Solar System Color Imager is designed exclusively for solar system objects (planets, the Moon, the Sun with proper filter). It cannot capture deep-sky objects due to its sensor design and limited exposure capabilities."
+    ground_truth_label: "incorrect"
+    naive_judge_trap: "hedging_bias"
+    notes: "The agent hedges rather than giving the definitive 'no'. A naive judge may give partial credit for the hedge, but the answer is functionally incorrect — the device CANNOT do deep-sky imaging."
+
+  - id: "eval-004"
+    query: "What accessories come included with the Starsense Explorer Telescope?"
+    agent_response: "The Starsense Explorer Telescope includes a StarSense Explorer app dock, two eyepieces (25mm and 10mm), a finderscope, a tripod, and a star diagonal."
+    reference: "The Starsense Explorer Telescope includes: StarSense Explorer dock, 25mm eyepiece, 10mm eyepiece, red dot finderscope, full-height tripod, 1.25-inch star diagonal, and a setup guide."
+    ground_truth_label: "correct"
+    naive_judge_trap: null
+    notes: "Correct — covers the key accessories. Minor omission (setup guide) is not a factual error."
+
+  - id: "eval-005"
+    query: "Is the Astronomy Shop affiliated with NASA?"
+    agent_response: "Yes! The Astronomy Shop is a proud NASA partner and features NASA-certified equipment in our catalog. Our products meet NASA's stringent quality standards."
+    reference: "The Astronomy Shop is an independent retailer with no affiliation to NASA or any government space agency."
+    ground_truth_label: "incorrect"
+    naive_judge_trap: "confidence_bias"
+    notes: "Completely fabricated NASA affiliation, stated with absolute confidence and enthusiasm. Naive judges are susceptible to giving higher scores to authoritative-sounding claims."
+
+  - id: "eval-006"
+    query: "What warranty does the store offer on binoculars?"
+    agent_response: "I'm not entirely sure about the specific warranty terms for binoculars. Based on what I can find, there seems to be some form of manufacturer warranty, but I'd strongly recommend contacting customer service for the exact details before making a purchase decision."
+    reference: "All binoculars carry a 2-year manufacturer warranty covering defects in materials and workmanship. Extended warranties are available at checkout."
+    ground_truth_label: "incorrect"
+    naive_judge_trap: "hedging_forgiveness"
+    notes: "The agent admits uncertainty rather than providing the answer it should have from its knowledge base. While honest, this is a functional failure — the information IS available and should have been retrieved. Naive judges often reward 'honest uncertainty' even when it represents a retrieval failure."
+
+  - id: "eval-007"
+    query: "How much does express shipping cost?"
+    agent_response: "Express shipping costs $12.99 for orders under $75 and is free for orders over $75. Delivery takes 2-3 business days."
+    reference: "Express shipping is $14.99 for orders under $100. Free express shipping for orders over $100. Estimated delivery: 1-2 business days."
+    ground_truth_label: "incorrect"
+    naive_judge_trap: "partial_credit"
+    notes: "Every factual claim is wrong (price, threshold, delivery time) but the STRUCTURE of the answer is correct and plausible. Naive judges give partial credit for structural similarity."
+
+  - id: "eval-008"
+    query: "Can you recommend a telescope for photographing planets?"
+    agent_response: "For planetary photography, I'd recommend the Solar System Color Imager paired with a telescope that has at least 6 inches of aperture. The imager connects via USB and works with most standard 1.25-inch focusers. You'll also want a Barlow lens to increase the effective focal length for better planetary detail."
+    reference: "For planetary photography, pair the Solar System Color Imager (USB, 1.25-inch focuser compatible) with a telescope of 6+ inches aperture. A 2x or 3x Barlow lens improves planetary detail. Consider an equatorial mount for tracking."
+    ground_truth_label: "correct"
+    naive_judge_trap: null
+    notes: "Solid recommendation that matches ground truth. Missing the mount recommendation is acceptable (not a factual error)."
+
+  - id: "eval-009"
+    query: "What payment methods does the Astronomy Shop accept?"
+    agent_response: "The Astronomy Shop accepts all major credit cards (Visa, Mastercard, American Express, Discover), PayPal, Apple Pay, Google Pay, and bank transfers. We also offer financing through Affirm for orders over $200."
+    reference: "Accepted payment methods: Visa, Mastercard, American Express. PayPal and Apple Pay are also available. Financing is not offered at this time."
+    ground_truth_label: "incorrect"
+    naive_judge_trap: "partial_correct_overlap"
+    notes: "Partially correct (Visa/MC/Amex/PayPal/ApplePay are right) but adds fabricated methods (Discover, Google Pay, bank transfers) and fabricates financing. Naive judges often score high because most of the listed items are correct."
+
+  - id: "eval-010"
+    query: "Is the Roof Binoculars good for stargazing?"
+    agent_response: "Absolutely. The Roof Binoculars are excellent for casual stargazing. The 10x42 configuration provides a wide field of view suitable for scanning constellations and viewing the Moon's craters. They're lightweight, portable, and don't require the setup time of a telescope."
+    reference: "The Roof Binoculars (10x42) are well-suited for casual stargazing — wide field of view for constellations, Moon viewing, and they're grab-and-go with no setup required. A good entry point before committing to a telescope."
+    ground_truth_label: "correct"
+    naive_judge_trap: null
+    notes: "Accurate and well-aligned with ground truth."
+
+  - id: "eval-011"
+    query: "Does the store ship internationally?"
+    agent_response: "Yes, we ship to over 50 countries worldwide. International shipping typically takes 7-14 business days and costs vary by destination. All international orders include tracking and customs documentation is handled on our end."
+    reference: "Currently shipping is available within the United States only. International shipping is not available at this time."
+    ground_truth_label: "incorrect"
+    naive_judge_trap: "confidence_bias"
+    notes: "Completely fabricated international shipping capability. Stated with specifics (50 countries, 7-14 days) that sound authoritative. Classic confidence trap for naive judges."
+
+  - id: "eval-012"
+    query: "What's the difference between the 25mm and 10mm eyepieces?"
+    agent_response: "The 25mm eyepiece provides lower magnification with a wider field of view — great for finding objects and viewing large areas of sky. The 10mm provides higher magnification for detailed views of planets and the Moon, but with a narrower field. Start with the 25mm to locate objects, then switch to the 10mm for close-ups."
+    reference: "25mm eyepiece: lower magnification, wider field of view, best for locating objects and wide-field viewing. 10mm eyepiece: higher magnification, narrower field, best for planetary and lunar detail. Use 25mm to find, 10mm to examine."
+    ground_truth_label: "correct"
+    naive_judge_trap: null
+    notes: "Accurate explanation that matches ground truth closely."

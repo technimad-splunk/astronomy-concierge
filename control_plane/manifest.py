@@ -18,6 +18,9 @@ Fields (all required unless noted):
                          the vignette promises will fire (for auto-verification).
 - ``talk_track``       — path (relative to the scenario folder) to the caption file.
 - ``reset``            — path (repo-root relative) to the per-scenario reset script.
+- ``quiet_background`` — optional boolean (default ``false``). When true, the
+                         control plane drains the demo's load-generator before
+                         driving the agent and restores it on reset.
 
 Validation is strict and gives a clear, path-prefixed error on any malformed
 manifest, so a bad drop-in folder is reported — not silently mis-run.
@@ -65,9 +68,10 @@ class Scenario:
     expected_signals: ExpectedSignals
     talk_track: str
     reset: str
+    quiet_background: bool = False
     # Locations resolved at load time (not part of the YAML contract).
-    dir: Path
-    manifest_path: Path
+    dir: Path = field(default=Path("."))
+    manifest_path: Path = field(default=Path("."))
 
     @property
     def talk_track_path(self) -> Path:
@@ -140,6 +144,10 @@ def parse_manifest(data: Any, *, scenario_dir: Path, manifest_path: Path) -> Sce
     talk_track = _require(data, "talk_track", where, types=(str,))
     reset = _require(data, "reset", where, types=(str,))
 
+    quiet_bg = data.get("quiet_background", False)
+    if not isinstance(quiet_bg, bool):
+        raise ManifestError(f"{where}: 'quiet_background' must be a boolean if present.")
+
     return Scenario(
         id=scenario_id,
         title=title,
@@ -149,6 +157,7 @@ def parse_manifest(data: Any, *, scenario_dir: Path, manifest_path: Path) -> Sce
         expected_signals=expected,
         talk_track=talk_track,
         reset=reset,
+        quiet_background=quiet_bg,
         dir=scenario_dir,
         manifest_path=manifest_path,
     )

@@ -63,9 +63,10 @@ def cmd_list(reg: Registry, args: argparse.Namespace) -> int:
     for s in reg.scenarios:
         g = ",".join(s.expected_signals.galileo) or "-"
         sp = ",".join(s.expected_signals.splunk) or "-"
+        quiet = "  quiet_bg" if s.quiet_background else ""
         print(f"  {s.id}")
         print(f"      title    : {s.title}")
-        print(f"      message  : {s.message}   duration: {s.duration_min} min")
+        print(f"      message  : {s.message}   duration: {s.duration_min} min{quiet}")
         print(f"      trigger  : {s.trigger.type} (ref={s.trigger.ref})")
         print(f"      signals  : galileo=[{g}] splunk=[{sp}]")
     if reg.errors:
@@ -84,6 +85,17 @@ def _drive_agent(scenario: Scenario, prompt: str, session_id: str) -> int:
     return proc.returncode
 
 
+def _run_loadgen(action: str) -> bool:
+    """Run ``scripts/loadgen.sh <action>``; return True on success."""
+    script = REPO_ROOT / "scripts" / "loadgen.sh"
+    if not script.is_file():
+        print(f"  WARNING: {script} not found; skipping load-generator {action}.",
+              file=sys.stderr)
+        return False
+    proc = subprocess.run(["bash", str(script), action], cwd=str(REPO_ROOT))
+    return proc.returncode == 0
+
+
 def cmd_play(reg: Registry, args: argparse.Namespace) -> int:
     try:
         scenario = reg.get(args.id)
@@ -92,6 +104,13 @@ def cmd_play(reg: Registry, args: argparse.Namespace) -> int:
         return 2
     print(f"Playing '{scenario.id}' — {scenario.title}")
     print(f"  message: {scenario.message}   trigger: {scenario.trigger.type}")
+
+    if scenario.quiet_background:
+        print("\nQuiet-background mode: draining the load-generator...")
+        if not _run_loadgen("quiet"):
+            print("  WARNING: load-generator drain returned non-zero; continuing.",
+                  file=sys.stderr)
+
     try:
         result = apply_trigger(scenario)
     except TriggerError as exc:
@@ -142,6 +161,12 @@ def cmd_reset(reg: Registry, args: argparse.Namespace) -> int:
             rc = rc or proc.returncode
     else:
         print(f"\n(no reset.sh at {reset_script}; trigger-level reset is authoritative.)")
+
+    print("\nRestoring load-generator (idempotent)...")
+    if not _run_loadgen("restore"):
+        print("  WARNING: load-generator restore returned non-zero; continuing.",
+              file=sys.stderr)
+
     return rc
 
 

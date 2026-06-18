@@ -27,16 +27,42 @@ scripts/control-plane.sh playlist [--message <pillar>]... [--budget <min>]   # c
   breaking the rest of the listing).
 - **play** — applies the scenario's `trigger` (the fault is induced), then, if a
   `--prompt` (or `trigger.params.drive_prompt`) is given, drives the concierge so
-  the run produces telemetry. `--no-drive` applies the trigger only.
+  the run produces telemetry. `--no-drive` applies the trigger only. If the
+  scenario declares `quiet_background: true`, the Astronomy Shop's Locust
+  load-generator is **drained first** (via `scripts/loadgen.sh quiet`) so the
+  agent's traffic is the only store activity — useful when a single failing
+  checkout would be masked by continuous healthy background load.
 - **reset** — runs the **trigger-level reset** (authoritative, deterministic) and
-  then the scenario's `reset.sh` if present. Restores baseline.
+  then the scenario's `reset.sh` if present. Restores baseline. **Always**
+  restores the load-generator (via `scripts/loadgen.sh restore`, idempotent) so
+  it is never left drained.
 - **verify** — runs the `expected_signals` auto-verification hook and prints a
-  report. Galileo signals are checked for **real** (poll/retry to tolerate
-  ingestion lag, L2); the Splunk `apm_all_green` signal is reported **attested**
-  (operator-verified out-of-band, with embedded evidence — the CLI's ingest-only
-  token can't query APM; see below).
+  report.   Galileo signals are checked for **real** (poll/retry to tolerate
+  ingestion lag, L2); named signals include quality metrics (e.g.
+  `context_adherence_low`), error metrics (`tool_error`), and detection signals
+  (`prompt_injection_detected`, `pii_exposed`). The Splunk `apm_all_green`
+  signal is reported **attested** (operator-verified out-of-band, with embedded
+  evidence — the CLI's ingest-only token can't query APM; see below).
 - **playlist** — composes a run by selecting/ordering scenarios keyed by `message`
   (pillar) and fitting a `--budget` time budget (minutes).
+
+## `quiet_background` and `scripts/loadgen.sh`
+
+Some scenarios need the demo's background load silenced so the agent's traffic
+is cleanly attributable in APM. The optional boolean field `quiet_background`
+(default `false`) in `scenario.yaml` controls this:
+
+- **`play`** — if `quiet_background: true`, runs `scripts/loadgen.sh quiet`
+  before applying the trigger. This POSTs to the Locust web API (`/stop`) via
+  `docker compose exec` (no host-port assumption), draining active users to 0.
+  Falls back to `docker compose stop load-generator` if the API is unreachable.
+- **`reset`** — **always** runs `scripts/loadgen.sh restore` (idempotent),
+  POSTing `/swarm` with `user_count` from the demo's `.env` (`LOCUST_USERS`,
+  default 5). If the container was stopped (fallback), it starts it first.
+
+The script is a safe no-op (exit 0, clear message) when Docker, the daemon, or
+the load-generator container are unavailable — it never breaks play/reset when
+the stage is down.
 
 ## The four fixed trigger mechanisms (demo-design §7.3)
 
