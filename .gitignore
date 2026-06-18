@@ -56,6 +56,20 @@ tmp/
 temp/
 .cache/
 
+# ── Vendored upstream (Phase 1) ──────────────────────────────────────────────────
+# The OpenTelemetry demo clone is large (~14 GB of images once run) and has its own
+# git history — we vendor it but do NOT track it. OUR overrides (stage/splunk-otel/)
+# and helper scripts (scripts/) stay tracked. Re-create the clone with the documented
+# git clone in stage/README.md.
+/stage/opentelemetry-demo/
+
+# ── Scenario-harness runtime state (Phase 3) ────────────────────────────────────
+# The agent overlay (rag_corpus / prompt_overlay / tool_fault triggers write here)
+# and the harness state dir (saved feature-flag variants for deterministic reset)
+# are runtime state recreated by `python -m control_plane play/reset` — not tracked.
+/agent/_overlay/
+/.harness/
+
 # ── Build / compiled ───────────────────────────────────────────────────────────
 *.o
 *.a

@@ -1,0 +1,17 @@
+# scenarios/stub-prompt-overlay/scenario.yaml
+#
+# HARNESS FIXTURE — not Phase-4 vignette content. This stub exercises the
+# `prompt_overlay` trigger: apply injects the overlay payload into the agent's
+# system prompt (the agent picks it up on its next run); reset clears it.
+id: stub-prompt-overlay
+title: "[harness stub] prompt_overlay trigger"
+message: harness-stub
+duration_min: 1
+trigger:
+  type: prompt_overlay
+  ref: overlay/stub-injection.txt        # payload file, relative to this scenario folder
+expected_signals:
+  galileo: [prompt_injection_detected]
+  splunk:  []
+talk_track: captions/stub-prompt-overlay.md
+reset: scenarios/stub-prompt-overlay/reset.sh

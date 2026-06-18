@@ -38,5 +38,5 @@ Types: `feat`, `fix`, `chore`, `docs`, `refactor`, `test`, `ci`.
 - NEVER force-push to `main`.
 - NEVER skip hooks (`--no-verify`) unless explicitly instructed by the user.
 - NEVER amend a commit that has already been pushed to remote.
-- ONLY create commits when the user explicitly asks for a commit.
+- Pro actively suggest to create a commit after a logical set of work has been completed. ONLY create commit when the user explicitly APPROVES.
 - ONLY push to remote when the user explicitly asks for a push.

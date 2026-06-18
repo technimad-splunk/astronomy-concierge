@@ -1,0 +1,76 @@
+# Splunk Observability Cloud export — OUR tracked override (Phase 1).
+#
+# Merged into the upstream demo collector config as the second `--config`
+# (the demo loads `/etc/otelcol-config.yml` then this file). The collector
+# config resolver REPLACES list values on merge, so the pipelines below
+# re-list the upstream processors/exporters and add ours on the end.
+#
+# Transport is OTLP/HTTP only — NOT the deprecated `sapm` exporter. Splunk
+# Observability does not accept OTLP over gRPC, so traces use `otlphttp`.
+# Endpoints + auth come from the collector container env (SPLUNK_REALM /
+# SPLUNK_ACCESS_TOKEN, injected by docker-compose.override.yml). The token is
+# never written to disk here.
+
+exporters:
+  signalfx:
+    # The SOLE carrier of metrics to Splunk Observability (incl. the concierge's
+    # GenAI token-usage / operation-duration histograms).
+    #
+    # send_otlp_histograms: true is REQUIRED by Splunk "Set up AI Agent
+    # Monitoring": "Histogram metrics are required to display data on AI Agent
+    # Monitoring pages. To send histogram data to Splunk Observability Cloud with
+    # the SignalFx exporter, set send_otlp_histograms: true." It forwards native
+    # OTLP histograms to <ingest>/v2/datapoint/otlp.
+    #
+    # IMPORTANT verification caveat: native OTLP histograms are a DISTINCT metric
+    # type in o11y and do NOT appear in the metric-NAME finder/catalog (which
+    # lists gauges/counters). So "gen_ai.* absent from the metric finder" is a
+    # FALSE NEGATIVE — NOT proof the data is missing. Verify histogram-backed
+    # data in the UI: APM > AI agents / AI trace data. Do NOT switch to the
+    # SignalFx translated representation (send_otlp_histograms: false) just to
+    # "make names show up" — AI Agent Monitoring needs the native histogram.
+    #
+    # `realm:` derives the canonical `ingest.<realm>.signalfx.com` /
+    # `api.<realm>.signalfx.com` endpoints (canonical form; `*.signalfx.com` and
+    # `*.observability.splunkcloud.com` are equivalent valid Observability
+    # ingests for this realm — the host was never the problem).
+    send_otlp_histograms: true
+    correlation: null
+    access_token: ${env:SPLUNK_ACCESS_TOKEN}
+    realm: ${env:SPLUNK_REALM}
+    root_path: /hostfs
+    sync_host_metadata: true
+
+  otlphttp/splunk:
+    # TRACES ONLY. Splunk Observability OTLP/HTTP trace ingest on the realm's
+    # signalfx.com domain (the host the Phase-0 connectivity check validated for
+    # realm eu0). Metrics do NOT use this exporter — they go via `signalfx`
+    # above, so we avoid double-counting the same metric through two paths.
+    traces_endpoint: "https://ingest.${env:SPLUNK_REALM}.signalfx.com/v2/trace/otlp"
+    headers:
+      X-SF-Token: "${env:SPLUNK_ACCESS_TOKEN}"
+
+processors:
+  # Tag everything that flows to Splunk with a recognizable APM environment so
+  # the store is easy to find: APM > Environment = "local-agent-galileo".
+  resource/splunk:
+    attributes:
+      - key: deployment.environment
+        value: local-agent-galileo
+        action: upsert
+
+service:
+  pipelines:
+    traces:
+      processors: [resourcedetection, memory_limiter, transform, resource/splunk]
+      exporters: [otlp, spanmetrics, otlphttp/splunk]
+    metrics:
+      # `receivers` is intentionally omitted so the merge KEEPS the upstream list
+      # (which includes `otlp`) — VERIFIED live: the concierge's OTLP GenAI
+      # histograms (gen_ai.client.token.usage / gen_ai.client.operation.duration)
+      # are received here. They are exported to Splunk via `signalfx` ONLY (with
+      # send_otlp_histograms: true -> native OTLP histograms for AI Agent
+      # Monitoring); `otlphttp/splunk` is deliberately excluded so metrics are
+      # not double-counted across two paths.
+      processors: [resourcedetection, memory_limiter, resource/splunk]
+      exporters: [signalfx]

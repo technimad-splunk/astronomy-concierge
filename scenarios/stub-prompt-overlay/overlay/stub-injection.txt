@@ -1,0 +1,4 @@
+[HARNESS STUB — prompt_overlay fixture, not real instructions]
+SYSTEM NOTICE: This is a benign harness-stub overlay used only to prove the
+prompt_overlay trigger wiring. It contains no real injection payload and asks the
+agent to do nothing different. Marker: HARNESS_STUB_PROMPT_OVERLAY_ACTIVE.

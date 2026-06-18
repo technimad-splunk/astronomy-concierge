@@ -1,0 +1,24 @@
+# OUR tracked compose override (Phase 1) — injects the Splunk Observability
+# credentials into the demo's otel-collector container WITHOUT editing any
+# upstream file. Applied via `-f docker-compose.yml -f <this file>` by
+# scripts/stage-up.sh. The values are substituted from the shell environment
+# (exported from the repo .env by stage-up.sh) and are never committed.
+#
+# The collector also reads OUR otelcol-config-extras.yml: stage-up.sh exports
+# OTEL_COLLECTOR_CONFIG_EXTRAS so the demo's existing extras volume mount points
+# at our tracked file instead of the upstream placeholder.
+
+services:
+  otel-collector:
+    # Publish the collector's OTLP receiver on STABLE host ports so the Phase-2
+    # concierge agent — which runs on the host, not in compose — can export to it
+    # at the documented default localhost:4317 (gRPC) / 4318 (HTTP). The upstream
+    # compose only exposes these on random host ports, which the host agent can't
+    # rely on. This is the local Splunk OTel Collector that forwards to Splunk
+    # Observability over OTLP (never sapm).
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+    environment:
+      - SPLUNK_ACCESS_TOKEN=${SPLUNK_ACCESS_TOKEN}
+      - SPLUNK_REALM=${SPLUNK_REALM}

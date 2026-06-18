@@ -1,0 +1,20 @@
+# scenarios/stub-tool-fault/scenario.yaml
+#
+# HARNESS FIXTURE — not Phase-4 vignette content. This stub exercises the
+# `tool_fault` trigger: apply faults a named concierge tool (the agent reads the
+# overlay on its next run); reset clears the fault.
+id: stub-tool-fault
+title: "[harness stub] tool_fault trigger"
+message: harness-stub
+duration_min: 1
+trigger:
+  type: tool_fault
+  ref: get_recommendations               # a concierge tool name
+  params:
+    mode: error                          # error (tool returns an error) | remove (tool withheld)
+    message: "recommendation service is degraded (harness stub)"
+expected_signals:
+  galileo: [tool_selection_quality_low]
+  splunk:  [apm_all_green]
+talk_track: captions/stub-tool-fault.md
+reset: scenarios/stub-tool-fault/reset.sh

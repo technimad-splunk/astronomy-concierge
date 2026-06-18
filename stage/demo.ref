@@ -1,0 +1,7 @@
+# Single source of truth for the vendored OpenTelemetry demo (the "Astronomy Shop").
+#
+# Sourced by scripts/stage-setup.sh (to clone the right ref) and by
+# scripts/stage-up.sh (to pin the demo IMAGES to the same version as the source).
+# Bump the version in ONE place: here.
+DEMO_REPO=https://github.com/open-telemetry/opentelemetry-demo.git
+DEMO_REF=2.2.0

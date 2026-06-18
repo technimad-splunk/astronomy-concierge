@@ -1,0 +1,13 @@
+# scenarios/invisible-failure/scenario.yaml
+id: invisible-failure
+title: "The Invisible Failure"
+message: observability-oversight        # which pillar it proves (for SE playlists)
+duration_min: 3
+trigger:                                 # how we INDUCE it (no reliance on luck)
+  type: feature_flag                     # feature_flag | rag_corpus | tool_fault | prompt_overlay
+  ref: productCatalogStaleData
+expected_signals:
+  galileo: [context_adherence_low, ungrounded_claim]
+  splunk:  [apm_all_green]               # the punchline assertion
+talk_track: captions/invisible-failure.md
+reset: scenarios/invisible-failure/reset.sh

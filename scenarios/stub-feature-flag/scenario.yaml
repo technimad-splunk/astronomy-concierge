@@ -1,0 +1,17 @@
+# scenarios/stub-feature-flag/scenario.yaml
+#
+# HARNESS FIXTURE — not Phase-4 vignette content. This stub exercises the
+# `feature_flag` trigger end-to-end (apply flips a flagd flag in the running
+# stage; reset restores it). It is intentionally minimal.
+id: stub-feature-flag
+title: "[harness stub] feature_flag trigger"
+message: harness-stub                    # fixture pillar — kept out of real SE playlists
+duration_min: 1
+trigger:
+  type: feature_flag
+  ref: recommendationCacheFailure        # a flag the vendored demo ships (defaultVariant off)
+expected_signals:
+  galileo: [context_adherence_low]       # exercises the (real) Galileo verifier
+  splunk:  [apm_all_green]                # exercises the (unverified-by-design) Splunk verifier
+talk_track: captions/stub-feature-flag.md
+reset: scenarios/stub-feature-flag/reset.sh

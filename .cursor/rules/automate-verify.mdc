@@ -1,5 +1,5 @@
 ---
-description: Automate repetitive tasks and always verify changes before considering work complete
+description: Automate repetitive tasks, keep the environment reproducible from scripts/READMEs, and always verify changes before considering work complete
 alwaysApply: true
 ---
 
@@ -23,11 +23,23 @@ Work is not done until it has been verified. Prefer automation over manual steps
 - Prefer CI (e.g. GitHub Actions) for checks that gate merges into `main`.
 - Grow the automation layer incrementally as the project matures; do not over-engineer upfront.
 
+## Reproducibility
+
+The entire environment MUST be reproducible from the scripts and READMEs in this repo alone. A fresh clone plus the documented commands must reach a running system with no undocumented, machine-specific, or manual steps.
+
+- **No manual, drifting setup.** Any external dependency (vendored repos, demo apps, datasets, models, images) must be fetched by a script and pinned to a fixed version/ref — never a hand-run `git clone` of a moving branch.
+- **Track what recreates it, even if you ignore the bulk.** If a large external checkout is gitignored, the script that recreates it AND our overrides/config for it MUST be committed.
+- **One documented path.** `README.md` must describe the complete zero-to-running sequence (prerequisites → env → setup → run → verify → teardown), and each step should map to a script in `scripts/`.
+- **Clean-room verify.** Before declaring environment work done, prove it: delete the generated/vendored artifacts and re-run the setup scripts from scratch to confirm they reproduce a working system.
+
 ## Do / Don't
 
 ```
 ✅ Run `npm test` (or equivalent) before declaring a feature done.
 ✅ Add a script for any setup step that takes more than two commands.
+✅ Pin external dependencies to a fixed ref and fetch them via a tracked setup script.
+✅ Prove reproducibility by re-running setup from a clean checkout before calling environment work done.
 ❌ Mark a task complete without having actually run the code.
 ❌ Suppress test failures with skip flags to move faster.
+❌ Leave the environment dependent on a manual checkout or an undocumented step that only exists on your machine.
 ```

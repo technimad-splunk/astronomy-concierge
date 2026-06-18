@@ -1,0 +1,59 @@
+[project]
+name = "local-agent-galileo"
+version = "0.0.0"
+description = "Galileo x Splunk Observability demo: a LangGraph AI shopping concierge added to a forked OpenTelemetry Astronomy Shop, instrumented once with OTel GenAI and fanned out to both backends."
+readme = "README.md"
+requires-python = ">=3.12"
+
+# Minimum version specifiers. The minimums below are the exact versions the
+# Phase-2 concierge was built and verified against (resolved via pip on
+# 2026-06-16); a fresh `uv sync` / `pip install -e .` locks compatible versions.
+dependencies = [
+    # Agent framework + LangChain provider abstraction (D1, D6).
+    # NOTE: LangChain/LangGraph 1.x; create_react_agent lives in langgraph.prebuilt.
+    "langgraph>=1.2",
+    "langchain>=1.3",
+    "langchain-core>=1.4",
+    "langchain-openai>=1.3",   # ChatOpenAI (EC2 runtime)
+    "langchain-ollama>=1.1",   # ChatOllama (Apple-silicon runtime)
+    # Galileo Python SDK (the hero AI-observability backend) — provides the
+    # GalileoCallback (LangChain/LangGraph) and the OTLP GalileoSpanProcessor.
+    "galileo>=2.3",
+    # OpenTelemetry GenAI instrumentation + OTLP export — the single-instrument /
+    # dual-fan-out keystone. The ACTIVE OTel/Splunk instrumentor is the OpenLLMetry
+    # / Traceloop LangChain instrumentor: it emits the OTel GenAI semantic
+    # conventions (gen_ai.* spans) AND the GenAI client histograms
+    # (gen_ai.client.token.usage / gen_ai.client.operation.duration) for ALL
+    # LangChain chat models — including ChatOllama — which is what Splunk AI Agent
+    # Monitoring keys off. (The official OTel-contrib LangChain instrumentor only
+    # emits gen_ai.* for ChatOpenAI/ChatBedrock, so it would leave the Ollama
+    # default uninstrumented.)
+    "opentelemetry-instrumentation-langchain>=0.61",
+    # GenAI semantic-convention attribute/metric definitions used by the Traceloop
+    # instrumentor above (pinned for reproducible gen_ai.* attribute names).
+    "opentelemetry-semantic-conventions-ai>=0.5.1",
+    # OpenInference is retained only for `using_session` (Galileo session
+    # context); it is no longer the active OTel instrumentor.
+    "openinference-instrumentation-langchain>=0.1.66",
+    # SDK provides the TracerProvider + MeterProvider; the OTLP meta-package pulls
+    # the gRPC span AND metric exporters used to reach the local Splunk collector.
+    "opentelemetry-sdk>=1.42",
+    "opentelemetry-exporter-otlp>=1.42",
+    # Store API tool calls (frontend-proxy HTTP) + config/secrets loading.
+    "httpx>=0.27",
+    "python-dotenv>=1.0",
+    # Scenario-harness manifest contract (scenarios/*/scenario.yaml) loader.
+    "pyyaml>=6.0",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = [
+    "agent",
+    "control_plane",
+    "control_plane.triggers",
+    "control_plane.verification",
+]

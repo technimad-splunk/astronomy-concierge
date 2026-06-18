@@ -1,0 +1,17 @@
+# scenarios/stub-rag-corpus/scenario.yaml
+#
+# HARNESS FIXTURE — not Phase-4 vignette content. This stub exercises the
+# `rag_corpus` trigger: apply overlays the scenario's corpus/ docs onto the
+# agent's knowledge base (non-destructively); reset removes the overlay.
+id: stub-rag-corpus
+title: "[harness stub] rag_corpus trigger"
+message: harness-stub
+duration_min: 1
+trigger:
+  type: rag_corpus
+  ref: corpus                            # subdir of this scenario folder holding *.md docs
+expected_signals:
+  galileo: [context_adherence_low, ungrounded_claim]
+  splunk:  []
+talk_track: captions/stub-rag-corpus.md
+reset: scenarios/stub-rag-corpus/reset.sh
