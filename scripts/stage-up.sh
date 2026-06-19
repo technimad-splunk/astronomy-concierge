@@ -52,6 +52,21 @@ read_env_var() {
   printf '%s' "${val}"
 }
 
+# Return 0 if something is already listening on the given TCP port (loopback).
+# Prefer lsof (reliable on macOS); fall back to bash /dev/tcp if lsof is absent.
+port_in_use() {
+  local port="$1"
+  if command -v lsof >/dev/null 2>&1; then
+    lsof -nP -iTCP:"${port}" -sTCP:LISTEN >/dev/null 2>&1
+    return $?
+  fi
+  if (exec 3<>"/dev/tcp/127.0.0.1/${port}") >/dev/null 2>&1; then
+    exec 3>&- 3<&- 2>/dev/null || true
+    return 0
+  fi
+  return 1
+}
+
 SPLUNK_ACCESS_TOKEN="$(read_env_var SPLUNK_ACCESS_TOKEN)"
 SPLUNK_REALM="$(read_env_var SPLUNK_REALM)"
 [[ -n "${SPLUNK_ACCESS_TOKEN}" ]] || { echo "FATAL: SPLUNK_ACCESS_TOKEN is empty in ${ENV_FILE}." >&2; exit 2; }
@@ -107,10 +122,42 @@ echo "stage-up: APM environment = local-agent-galileo  (transport: OTLP/HTTP)"
 cd "${DEMO_DIR}"
 docker compose -f "${COMPOSE_MAIN}" -f "${OVERRIDE_FILE}" up -d --remove-orphans
 
+# --- Also launch the SE control-plane web UI (host process, NOT a container) --
+# The SE console needs HOST access (the running stage's flagd config, Galileo, the
+# repo .venv) so it runs as a backgrounded host Python/uvicorn process — never a
+# container. It is loopback-only (127.0.0.1) by design. We background it so
+# stage-up returns immediately, record its PID under the gitignored .harness/
+# dir, and tee its output to a log file there. Idempotent: if the port is already
+# in use we assume it's already running and skip a second launch.
+CONTROL_PLANE_WEB_HOST="127.0.0.1"
+CONTROL_PLANE_WEB_PORT="8099"
+HARNESS_DIR="${REPO_ROOT}/.harness"
+CP_PID_FILE="${HARNESS_DIR}/control-plane-web.pid"
+CP_LOG_FILE="${HARNESS_DIR}/control-plane-web.log"
+mkdir -p "${HARNESS_DIR}"
+
+if port_in_use "${CONTROL_PLANE_WEB_PORT}"; then
+  echo "stage-up: SE console port ${CONTROL_PLANE_WEB_PORT} already in use — assuming it's already running; skipping launch."
+else
+  echo "stage-up: launching SE control-plane web UI (host process, loopback-only) ..."
+  # control-plane-web.sh execs uvicorn, so the recorded PID is the server itself
+  # (stage-down.sh kills it directly). First-run venv/dep bootstrap streams to the
+  # log file; the server may take a few seconds to start listening on first run.
+  nohup "${SCRIPT_DIR}/control-plane-web.sh" --host "${CONTROL_PLANE_WEB_HOST}" --port "${CONTROL_PLANE_WEB_PORT}" >"${CP_LOG_FILE}" 2>&1 &
+  CP_PID=$!
+  echo "${CP_PID}" >"${CP_PID_FILE}"
+  echo "stage-up: SE console starting (pid ${CP_PID}); logs: ${CP_LOG_FILE}"
+fi
+
 cat <<EOF
 
-stage-up: containers starting. Useful next steps:
-  - Storefront:        http://localhost:8080/
+stage-up: containers starting. Interfaces:
+  - Astronomy Shop storefront:   http://localhost:8080/
+  - Astronomy Concierge chat:    http://localhost:${CONCIERGE_WEB_PORT:-8090}/   (container)
+  - SE Control-Plane web UI:     http://${CONTROL_PLANE_WEB_HOST}:${CONTROL_PLANE_WEB_PORT}/   (host process, loopback-only)
+
+Useful next steps:
   - Collector logs:    docker logs otel-collector --since 2m | grep -i -E 'splunk|export|error|permission'
-  - Stop the stage:    scripts/stage-down.sh ${MODE}
+  - SE console logs:   tail -f ${CP_LOG_FILE}
+  - Stop everything:   scripts/stage-down.sh ${MODE}
 EOF

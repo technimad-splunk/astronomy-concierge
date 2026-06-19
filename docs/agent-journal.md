@@ -619,3 +619,18 @@ entry — there is no user-facing change yet. No application code or config touc
 - **Reversed the "Envoy injection out of scope" stance.** Cart sharing genuinely requires reading the storefront's per-origin `localStorage` shopper id, which only a script on the storefront's own origin can do. The id is mirrored into a port-agnostic `concierge_session` cookie on `localhost`. The injection is a tracked Envoy template override bind-mounted at runtime — the gitignored vendored clone is never edited in place. No secrets cross the bridge (the shopper id is a non-sensitive demo UUID the storefront already exposes client-side).
 
 **Effect on codebase / UX:** `scripts/stage-up.sh` (env export), `agent/telemetry.py` (`flush_galileo`), `agent/store_client.py` (`user_id`), `web/concierge/**` (per-turn flush, `cart_user_id` threading, `/images` mount, restyle, Enter-to-send), new tracked `stage/splunk-otel/frontend-proxy/envoy.tmpl.yaml` + `web/concierge/embed/concierge-bridge.js`, and the `frontend-proxy` block in `stage/splunk-otel/docker-compose.override.yml`. Verified live: Galileo uploads per interaction (Splunk unchanged) and the cart is shared across the storefront and concierge tabs.
+
+---
+
+## 2026-06-19 — Web-first docs refresh + model roster update
+
+**What:** Updated the operator-facing docs to make web interfaces the explicit primary path, with CLI usage clearly framed as fallback-only, and reconciled bring-up/teardown language to the current orchestration contract. Also updated `.cursor/rules/subagent-models.mdc` to include newly available model slugs.
+
+**Why:** The owner requested a clearer, authoritative startup walkthrough centered on the three browser surfaces, plus strict consistency between `README.md`, `docs/runbook.md`, and the stage orchestration contract (`stage-up` starts storefront + concierge + SE console; `stage-down` stops the full stack including the SE console). The model roster update is mandated by the rule's maintenance clause when new valid slugs appear.
+
+**Decisions / trade-offs:**
+- Kept README's required section structure while replacing casual usage framing with an imperative startup sequence and a prominent primary interface map.
+- Limited runbook edits to bring-up/interface reconciliation only (no broad rewrite), preserving the existing vignette guidance.
+- Added the four new model slugs to the roster table with concise strength/cost descriptors; retained all existing rows and the same verification date.
+
+**Effect on codebase / UX:** Updated only `README.md`, `docs/runbook.md`, `CHANGELOG.md`, `docs/agent-journal.md`, and `.cursor/rules/subagent-models.mdc`. Operators now get an unambiguous web-first startup flow and consistent URLs across docs; model-selection governance now reflects current available subagent models.

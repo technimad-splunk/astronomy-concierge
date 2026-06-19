@@ -9,6 +9,7 @@ import subprocess
 import sys
 import threading
 from dataclasses import asdict, dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlsplit
@@ -18,6 +19,7 @@ from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from markdown_it import MarkdownIt
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
@@ -38,6 +40,7 @@ CSRF_COOKIE = "control_plane_csrf"
 CSRF_HEADER = "x-csrf-token"
 SECRET_PREFIXES = ("GALILEO_", "SPLUNK_", "OPENAI_")
 _SECRET_ENV_LINE_RE = re.compile(r"\b((?:GALILEO|SPLUNK|OPENAI)_[A-Z0-9_]+)\s*=\s*\S+")
+_HARNESS_STUB_MESSAGE = "harness-stub"
 
 _STATUS_GLYPH = {
     "pass": "PASS",
@@ -148,11 +151,16 @@ def _enforce_csrf_query(request: Request, csrf_token: str | None) -> None:
 
 
 def _scenario_payload(s: Scenario) -> dict[str, Any]:
+    drive_prompt = s.trigger.params.get("drive_prompt")
+    if not isinstance(drive_prompt, str):
+        drive_prompt = ""
     return {
         "id": s.id,
         "title": s.title,
         "message": s.message,
+        "is_harness_fixture": s.message == _HARNESS_STUB_MESSAGE,
         "duration_min": s.duration_min,
+        "drive_prompt": drive_prompt,
         "quiet_background": s.quiet_background,
         "trigger": {
             "type": s.trigger.type,
@@ -168,10 +176,76 @@ def _scenario_payload(s: Scenario) -> dict[str, Any]:
     }
 
 
-def _registry_payload(reg: Registry) -> dict[str, Any]:
+@lru_cache(maxsize=1)
+def _markdown_renderer() -> MarkdownIt:
+    renderer = MarkdownIt("commonmark", {"html": False, "linkify": True, "typographer": True})
+    renderer.enable("table")
+    renderer.enable("strikethrough")
+    return renderer
+
+
+def _render_markdown_html(content: str) -> str:
+    return _markdown_renderer().render(content)
+
+
+def _scenario_script_payload(s: Scenario) -> dict[str, Any]:
+    scenario_root = s.dir.resolve()
+    script_path = s.talk_track_path.resolve()
+    if script_path != scenario_root and scenario_root not in script_path.parents:
+        raise HTTPException(status_code=400, detail=f"Invalid script path for scenario '{s.id}'.")
+    if not script_path.is_file():
+        raise HTTPException(status_code=404, detail=f"No script found for scenario '{s.id}'.")
+    try:
+        markdown = script_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Unable to read script for scenario '{s.id}': {exc}",
+        ) from exc
+    relative_path = script_path.relative_to(scenario_root)
     return {
-        "scenarios": [_scenario_payload(s) for s in reg.scenarios],
+        "id": s.id,
+        "title": s.title,
+        "script_path": str(relative_path),
+        "script_markdown": markdown,
+        "script_html": _render_markdown_html(markdown),
+    }
+
+
+def _registry_payload(reg: Registry, *, include_fixtures: bool = False) -> dict[str, Any]:
+    scenarios = [
+        s
+        for s in reg.scenarios
+        if include_fixtures or s.message != _HARNESS_STUB_MESSAGE
+    ]
+    return {
+        "scenarios": [_scenario_payload(s) for s in scenarios],
         "errors": [{"folder": str(e.folder), "error": e.error} for e in reg.errors],
+    }
+
+
+def _runbook_payload() -> dict[str, Any]:
+    runbook_path = REPO_ROOT / "docs" / "runbook.md"
+    source_path = str(runbook_path.relative_to(REPO_ROOT))
+    if not runbook_path.is_file():
+        return {
+            "available": False,
+            "title": "Phase-6 SE Runbook",
+            "source_path": source_path,
+            "markdown": "",
+            "html": "",
+            "detail": "Runbook not available yet. Add docs/runbook.md to enable this view.",
+        }
+    try:
+        markdown = runbook_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"Unable to read runbook: {exc}") from exc
+    return {
+        "available": True,
+        "title": "Phase-6 SE Runbook",
+        "source_path": source_path,
+        "markdown": markdown,
+        "html": _render_markdown_html(markdown),
     }
 
 
@@ -371,8 +445,21 @@ def create_app() -> FastAPI:
         return {"status": "ok"}
 
     @app.get("/api/list")
-    async def api_list() -> dict[str, Any]:
-        return _registry_payload(discover())
+    async def api_list(include_fixtures: bool = False) -> dict[str, Any]:
+        return _registry_payload(discover(), include_fixtures=include_fixtures)
+
+    @app.get("/api/scenarios/{scenario_id}/script")
+    async def api_scenario_script(scenario_id: str) -> dict[str, Any]:
+        reg = discover()
+        try:
+            scenario = reg.get(scenario_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return _scenario_script_payload(scenario)
+
+    @app.get("/api/runbook")
+    async def api_runbook() -> dict[str, Any]:
+        return _runbook_payload()
 
     @app.post("/api/play")
     async def api_play(request: Request, payload: PlayRequest):

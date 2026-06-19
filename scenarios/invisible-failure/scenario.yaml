@@ -27,7 +27,8 @@ trigger:
   ref: productCatalogFailure
   params:
     drive_prompt: >-
-      I'm interested in the Roof Binoculars (product OLJCESPC7Z). Can you tell
+      I'm interested in the National Park Foundation Explorascope (product
+      OLJCESPC7Z). Can you tell
       me about that product — its price, description, and whether it's a good
       choice for a beginner? Also check if there are similar recommendations.
 expected_signals:

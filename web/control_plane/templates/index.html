@@ -16,6 +16,11 @@
       <section class="panel">
         <h2>Scenarios</h2>
         <button id="refresh-btn" type="button">Refresh Scenarios</button>
+        <label class="toggle-inline" for="show-fixtures">
+          <input id="show-fixtures" type="checkbox" />
+          Show harness fixtures
+        </label>
+        <button id="runbook-btn" type="button">Open Runbook</button>
         <div id="registry-errors" class="errors"></div>
         <div id="scenario-list"></div>
       </section>
@@ -23,8 +28,8 @@
       <section class="panel">
         <h2>Playlist Composer</h2>
         <form id="playlist-form">
-          <label for="playlist-messages">Pillars (comma separated)</label>
-          <input id="playlist-messages" type="text" placeholder="invisible-failure, firewall" />
+          <label for="playlist-messages">Pillars (the scenario <code>message</code> tag, comma separated)</label>
+          <input id="playlist-messages" type="text" placeholder="observability-oversight, guardrails" />
           <label for="playlist-budget">Budget (minutes, optional)</label>
           <input id="playlist-budget" type="number" min="1" />
           <button type="submit">Compose Playlist</button>
@@ -51,6 +56,17 @@
         <pre id="live-log"></pre>
       </section>
     </main>
+
+    <div id="doc-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="doc-title">
+      <div class="modal-panel">
+        <div class="modal-header">
+          <h2 id="doc-title">Document Viewer</h2>
+          <button id="doc-close-btn" type="button" class="modal-close-btn">Close</button>
+        </div>
+        <p id="doc-meta" class="doc-meta"></p>
+        <div id="doc-content" class="doc-content"></div>
+      </div>
+    </div>
 
     <script src="/static/app.js" defer></script>
   </body>

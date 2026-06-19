@@ -20,6 +20,10 @@ _Last verified: 2026-06-19. See **Maintenance** section below before trusting th
 | `composer-2.5` | General-purpose, moderate reasoning | Balanced |
 | `claude-4.6-sonnet-medium-thinking` | Planning, architecture, analysis | Medium |
 | `claude-4.6-opus-max` | Deep review, security audit, complex synthesis | Slow, expensive |
+| `claude-opus-4-8-thinking-high` | Deep reasoning, complex synthesis, high-stakes analysis | Slowest, most expensive |
+| `gpt-5.3-codex-xhigh` | Hard refactors and deeper code reasoning | Slower, higher cost |
+| `gpt-5.4-high` | Strong general-purpose reasoning and synthesis | Slower, premium |
+| `gpt-5.5-medium` | Strong general reasoning with better speed balance | Medium-fast, mid-high cost |
 
 ## Assignment rules
 

@@ -105,21 +105,172 @@
     }
   }, 500);
 
-  // --- Future widget mount (disabled) --------------------------------------
-  // The same injection seam can embed the concierge directly into the shop UI.
-  // Left disabled so this release only bridges the session. To enable, flip the
-  // guard and adjust styling/origin as needed.
-  //
-  // function mountConciergeWidget(origin) {
-  //   if (document.getElementById("concierge-widget-frame")) return;
-  //   var frame = document.createElement("iframe");
-  //   frame.id = "concierge-widget-frame";
-  //   frame.src = origin + "/";
-  //   frame.title = "Astronomy Concierge";
-  //   frame.style.cssText =
-  //     "position:fixed;bottom:16px;right:16px;width:380px;height:560px;" +
-  //     "border:0;border-radius:12px;box-shadow:0 8px 32px rgba(0,0,0,.25);z-index:2147483647;";
-  //   document.body.appendChild(frame);
-  // }
-  // mountConciergeWidget(window.__CONCIERGE_ORIGIN__ || "");
+  // --- Embedded concierge modal ---------------------------------------------
+  function deriveConciergeOrigin() {
+    var configuredOrigin =
+      typeof window.__CONCIERGE_ORIGIN__ === "string"
+        ? window.__CONCIERGE_ORIGIN__.trim()
+        : "";
+    if (configuredOrigin) {
+      return configuredOrigin.replace(/\/+$/, "");
+    }
+
+    var script =
+      document.currentScript ||
+      document.querySelector('script[src*="/embed/concierge-bridge.js"]');
+    if (script && script.src) {
+      try {
+        return new URL(script.src, window.location.href).origin;
+      } catch (e) {
+        /* ignore parse errors */
+      }
+    }
+    return "";
+  }
+
+  function ensureModalStyles() {
+    if (document.getElementById("concierge-modal-styles")) return;
+    var style = document.createElement("style");
+    style.id = "concierge-modal-styles";
+    style.textContent = [
+      "#concierge-nav-link{display:inline-flex;align-items:center;justify-content:center;margin-left:40px;",
+      "font-size:17px;font-weight:700;line-height:1;text-decoration:none;border:0;cursor:pointer;padding:0;white-space:nowrap;",
+      "background:linear-gradient(to right,#FF6B6B,#FFA726);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;color:transparent;transition:filter .15s ease;}",
+      "#concierge-nav-link:hover,#concierge-nav-link:focus-visible{filter:brightness(1.12) saturate(1.1);outline:none;}",
+      "#concierge-modal-overlay{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;",
+      "background:rgba(17,17,23,.5);z-index:2147483646;padding:20px;opacity:0;pointer-events:none;transition:opacity .2s ease;}",
+      "#concierge-modal-overlay.concierge-open{opacity:1;pointer-events:auto;}",
+      "#concierge-modal-panel{position:relative;background:#ffffff;border-radius:12px;width:min(960px,90vw);height:min(800px,85vh);",
+      "box-shadow:0 20px 60px rgba(0,0,0,.35);overflow:hidden;transform:translateY(12px) scale(.98);transition:transform .2s ease;}",
+      "#concierge-modal-overlay.concierge-open #concierge-modal-panel{transform:translateY(0) scale(1);}",
+      "#concierge-modal-close{position:absolute;top:10px;right:10px;z-index:2;border:0;border-radius:999px;width:32px;height:32px;",
+      "cursor:pointer;background:rgba(255,255,255,.95);color:#28272b;font-size:22px;line-height:1;display:flex;align-items:center;justify-content:center;}",
+      "#concierge-modal-close:hover{background:#f4f4f7;}",
+      "#concierge-widget-frame{width:100%;height:100%;border:0;background:#fff;display:block;}"
+    ].join("");
+    document.head.appendChild(style);
+  }
+
+  function ensureNavLink(onOpen) {
+    var currencySelect = document.querySelector(
+      'select[data-cy="currency-switcher"]'
+    );
+    if (!currencySelect) return;
+
+    var currencyContainer = currencySelect.closest("div");
+    if (!currencyContainer || !currencyContainer.parentNode) return;
+
+    var existingLink = document.getElementById("concierge-nav-link");
+    if (existingLink && existingLink.parentNode === currencyContainer.parentNode) {
+      if (existingLink.nextSibling !== currencyContainer) {
+        currencyContainer.parentNode.insertBefore(existingLink, currencyContainer);
+      }
+      return;
+    }
+
+    if (existingLink && existingLink.parentNode) {
+      existingLink.parentNode.removeChild(existingLink);
+    }
+
+    var link = document.createElement("button");
+    link.id = "concierge-nav-link";
+    link.type = "button";
+    link.textContent = "AI Concierge";
+    link.setAttribute("aria-haspopup", "dialog");
+    link.setAttribute("aria-controls", "concierge-modal-overlay");
+    link.addEventListener("click", onOpen);
+    currencyContainer.parentNode.insertBefore(link, currencyContainer);
+  }
+
+  function mountConciergeWidget(origin) {
+    if (!origin) return;
+    ensureModalStyles();
+
+    var overlay = document.getElementById("concierge-modal-overlay");
+    var panel;
+    var frame;
+    var closeButton;
+    var keyHandlerAttached = false;
+
+    function closeModal() {
+      if (!overlay) return;
+      overlay.classList.remove("concierge-open");
+      document.body.style.overflow = "";
+      var navLink = document.getElementById("concierge-nav-link");
+      if (navLink) navLink.focus();
+    }
+
+    function onKeyDown(event) {
+      if (event.key === "Escape") {
+        closeModal();
+      }
+    }
+
+    function openModal() {
+      if (!overlay) return;
+      if (!frame.src) {
+        frame.src = origin + "/";
+      }
+      overlay.classList.add("concierge-open");
+      document.body.style.overflow = "hidden";
+      if (!keyHandlerAttached) {
+        document.addEventListener("keydown", onKeyDown);
+        keyHandlerAttached = true;
+      }
+      window.setTimeout(function () {
+        if (closeButton) closeButton.focus();
+      }, 0);
+    }
+
+    if (!overlay) {
+      overlay = document.createElement("div");
+      overlay.id = "concierge-modal-overlay";
+      overlay.setAttribute("role", "dialog");
+      overlay.setAttribute("aria-modal", "true");
+      overlay.setAttribute("aria-label", "Astronomy Concierge");
+
+      panel = document.createElement("div");
+      panel.id = "concierge-modal-panel";
+
+      closeButton = document.createElement("button");
+      closeButton.id = "concierge-modal-close";
+      closeButton.type = "button";
+      closeButton.setAttribute("aria-label", "Close AI Concierge");
+      closeButton.textContent = "×";
+      closeButton.addEventListener("click", closeModal);
+
+      frame = document.createElement("iframe");
+      frame.id = "concierge-widget-frame";
+      frame.title = "Astronomy Concierge";
+      frame.loading = "eager";
+
+      panel.appendChild(closeButton);
+      panel.appendChild(frame);
+      overlay.appendChild(panel);
+      document.body.appendChild(overlay);
+
+      overlay.addEventListener("click", function (event) {
+        if (event.target === overlay) {
+          closeModal();
+        }
+      });
+
+      panel.addEventListener("click", function (event) {
+        event.stopPropagation();
+      });
+    } else {
+      panel = document.getElementById("concierge-modal-panel");
+      frame = document.getElementById("concierge-widget-frame");
+      closeButton = document.getElementById("concierge-modal-close");
+    }
+
+    ensureNavLink(openModal);
+
+    var observer = new MutationObserver(function () {
+      ensureNavLink(openModal);
+    });
+    observer.observe(document.documentElement, { childList: true, subtree: true });
+  }
+
+  mountConciergeWidget(deriveConciergeOrigin());
 })();

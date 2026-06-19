@@ -2,6 +2,13 @@ const logPane = document.getElementById("live-log");
 const scenarioList = document.getElementById("scenario-list");
 const registryErrors = document.getElementById("registry-errors");
 const playlistOutput = document.getElementById("playlist-output");
+const fixtureToggle = document.getElementById("show-fixtures");
+const runbookButton = document.getElementById("runbook-btn");
+const modal = document.getElementById("doc-modal");
+const modalTitle = document.getElementById("doc-title");
+const modalMeta = document.getElementById("doc-meta");
+const modalContent = document.getElementById("doc-content");
+const modalCloseButton = document.getElementById("doc-close-btn");
 
 let activeStream = null;
 
@@ -44,6 +51,15 @@ async function apiPost(path, body) {
   return data;
 }
 
+async function apiGet(path) {
+  const res = await fetch(path);
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.detail || `Request failed (${res.status})`);
+  }
+  return data;
+}
+
 function openStream(url) {
   if (activeStream) {
     activeStream.close();
@@ -63,37 +79,152 @@ function openStream(url) {
   });
 }
 
+function closeDocumentModal() {
+  modal.classList.add("hidden");
+  modalContent.innerHTML = "";
+  modalMeta.textContent = "";
+}
+
+function openDocumentModal({ title, meta, html, emptyMessage }) {
+  modalTitle.textContent = title;
+  modalMeta.textContent = meta || "";
+  if (html && html.trim()) {
+    modalContent.innerHTML = html;
+  } else {
+    const empty = document.createElement("p");
+    empty.className = "doc-empty";
+    empty.textContent = emptyMessage || "No content available.";
+    modalContent.replaceChildren(empty);
+  }
+  modal.classList.remove("hidden");
+}
+
 function renderScenario(s) {
   const card = document.createElement("article");
   card.className = "scenario-card";
+  const drivePrompt = s.drive_prompt || s.trigger?.params?.drive_prompt || "";
 
-  const prompt = s.trigger.params.drive_prompt || "";
-  card.innerHTML = `
-    <h3>${s.id}</h3>
-    <p><strong>${s.title}</strong></p>
-    <p>Message: ${s.message} | Duration: ${s.duration_min} min</p>
-    <p>Trigger: ${s.trigger.type} (ref=${s.trigger.ref})</p>
-    <label>Prompt override</label>
-    <input type="text" class="prompt-input" placeholder="${prompt}" />
-    <div class="actions">
-      <button type="button" class="play-btn">Play (SSE)</button>
-      <button type="button" class="reset-btn">Reset</button>
-      <button type="button" class="verify-btn">Verify (SSE)</button>
-    </div>
-  `;
+  const heading = document.createElement("h3");
+  heading.textContent = s.id;
+  card.appendChild(heading);
 
-  card.querySelector(".play-btn").addEventListener("click", () => {
-    const promptInput = card.querySelector(".prompt-input").value.trim();
+  const title = document.createElement("p");
+  const strong = document.createElement("strong");
+  strong.textContent = s.title;
+  title.appendChild(strong);
+  card.appendChild(title);
+
+  const summary = document.createElement("p");
+  summary.textContent = `Message: ${s.message} | Duration: ${s.duration_min} min`;
+  card.appendChild(summary);
+
+  const trigger = document.createElement("p");
+  trigger.textContent = `Trigger: ${s.trigger.type} (ref=${s.trigger.ref})`;
+  card.appendChild(trigger);
+
+  const promptLabel = document.createElement("label");
+  promptLabel.textContent = "Drive prompt";
+  card.appendChild(promptLabel);
+
+  const promptBlock = document.createElement("pre");
+  promptBlock.className = "prompt-block";
+  promptBlock.textContent = drivePrompt || "(No drive prompt configured.)";
+  card.appendChild(promptBlock);
+
+  const copyRow = document.createElement("div");
+  copyRow.className = "copy-row";
+  const copyButton = document.createElement("button");
+  copyButton.type = "button";
+  copyButton.className = "copy-btn";
+  copyButton.textContent = "Copy prompt";
+  copyButton.disabled = !drivePrompt;
+  const copyStatus = document.createElement("span");
+  copyStatus.className = "copy-status";
+  copyRow.appendChild(copyButton);
+  copyRow.appendChild(copyStatus);
+  card.appendChild(copyRow);
+
+  copyButton.addEventListener("click", async () => {
+    if (!drivePrompt) {
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(drivePrompt);
+      copyStatus.textContent = "Copied!";
+      window.setTimeout(() => {
+        copyStatus.textContent = "";
+      }, 2000);
+    } catch (err) {
+      appendLog(`ERROR copying prompt for ${s.id}: ${err.message}`);
+      copyStatus.textContent = "Copy failed";
+    }
+  });
+
+  const scriptButton = document.createElement("button");
+  scriptButton.type = "button";
+  scriptButton.className = "script-btn";
+  scriptButton.textContent = "View Demo Script";
+  card.appendChild(scriptButton);
+  scriptButton.addEventListener("click", async () => {
+    scriptButton.disabled = true;
+    scriptButton.textContent = "Loading script...";
+    try {
+      const data = await apiGet(`/api/scenarios/${encodeURIComponent(s.id)}/script`);
+      openDocumentModal({
+        title: `${s.id} Talk Track`,
+        meta: `Source: ${data.script_path}`,
+        html: data.script_html,
+        emptyMessage: "Script is empty.",
+      });
+    } catch (err) {
+      appendLog(`ERROR loading script for ${s.id}: ${err.message}`);
+    } finally {
+      scriptButton.disabled = false;
+      scriptButton.textContent = "View Demo Script";
+    }
+  });
+
+  const overrideLabel = document.createElement("label");
+  overrideLabel.textContent = "Prompt override";
+  card.appendChild(overrideLabel);
+
+  const promptInput = document.createElement("input");
+  promptInput.type = "text";
+  promptInput.className = "prompt-input";
+  promptInput.placeholder = drivePrompt || "Optional prompt override";
+  card.appendChild(promptInput);
+
+  const actions = document.createElement("div");
+  actions.className = "actions";
+  const playButton = document.createElement("button");
+  playButton.type = "button";
+  playButton.className = "play-btn";
+  playButton.textContent = "Play (SSE)";
+  const resetButton = document.createElement("button");
+  resetButton.type = "button";
+  resetButton.className = "reset-btn";
+  resetButton.textContent = "Reset";
+  const verifyButton = document.createElement("button");
+  verifyButton.type = "button";
+  verifyButton.className = "verify-btn";
+  verifyButton.textContent = "Verify (SSE)";
+  actions.appendChild(playButton);
+  actions.appendChild(resetButton);
+  actions.appendChild(verifyButton);
+  card.appendChild(actions);
+
+  playButton.addEventListener("click", () => {
+    const promptOverride = promptInput.value.trim();
     const params = new URLSearchParams({
       id: s.id,
-      ...(promptInput ? { prompt: promptInput } : {}),
+      ...(promptOverride ? { prompt: promptOverride } : {}),
       ...Object.fromEntries(new URLSearchParams(csrfQuery())),
     });
     appendLog(`Starting play stream for ${s.id}`);
     openStream(`/api/play/stream?${params.toString()}`);
   });
 
-  card.querySelector(".reset-btn").addEventListener("click", async () => {
+  resetButton.addEventListener("click", async () => {
     appendLog(`Resetting ${s.id}`);
     try {
       const out = await apiPost("/api/reset", { id: s.id });
@@ -104,7 +235,7 @@ function renderScenario(s) {
     }
   });
 
-  card.querySelector(".verify-btn").addEventListener("click", () => {
+  verifyButton.addEventListener("click", () => {
     const params = new URLSearchParams({
       id: s.id,
       ...Object.fromEntries(new URLSearchParams(csrfQuery())),
@@ -118,7 +249,10 @@ function renderScenario(s) {
 
 async function refreshScenarios() {
   try {
-    const res = await fetch("/api/list");
+    const params = new URLSearchParams({
+      include_fixtures: fixtureToggle.checked ? "true" : "false",
+    });
+    const res = await fetch(`/api/list?${params.toString()}`);
     const data = await res.json();
     scenarioList.innerHTML = "";
     registryErrors.innerHTML = "";
@@ -131,13 +265,45 @@ async function refreshScenarios() {
         .map((e) => `${e.folder}: ${e.error}`)
         .join("\n");
     }
-    appendLog(`Loaded ${data.scenarios.length} scenario(s).`);
+    appendLog(
+      `Loaded ${data.scenarios.length} scenario(s). fixtures=${fixtureToggle.checked ? "on" : "off"}`,
+    );
   } catch (err) {
     appendLog(`ERROR refreshing scenarios: ${err.message}`);
   }
 }
 
 document.getElementById("refresh-btn").addEventListener("click", refreshScenarios);
+fixtureToggle.addEventListener("change", refreshScenarios);
+runbookButton.addEventListener("click", async () => {
+  runbookButton.disabled = true;
+  runbookButton.textContent = "Loading Runbook...";
+  try {
+    const data = await apiGet("/api/runbook");
+    openDocumentModal({
+      title: data.title || "Runbook",
+      meta: `Source: ${data.source_path}`,
+      html: data.available ? data.html : "",
+      emptyMessage: data.detail || "Runbook not available yet.",
+    });
+  } catch (err) {
+    appendLog(`ERROR loading runbook: ${err.message}`);
+  } finally {
+    runbookButton.disabled = false;
+    runbookButton.textContent = "Open Runbook";
+  }
+});
+modalCloseButton.addEventListener("click", closeDocumentModal);
+modal.addEventListener("click", (event) => {
+  if (event.target === modal) {
+    closeDocumentModal();
+  }
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && !modal.classList.contains("hidden")) {
+    closeDocumentModal();
+  }
+});
 
 document.getElementById("clear-log-btn").addEventListener("click", () => {
   logPane.textContent = "";

@@ -31,6 +31,25 @@ case "${MODE}" in
   minimal) COMPOSE_MAIN="docker-compose.minimal.yml" ;;
 esac
 
+# --- Stop the backgrounded SE control-plane web UI (host process) ------------
+# stage-up.sh launches the SE console as a host Python process (not a container)
+# and records its PID under the gitignored .harness/ dir. Stop it here first so
+# teardown is symmetric. This is independent of Docker, so we do it BEFORE the
+# Docker preconditions — the console should be stopped even if Docker is down.
+CP_PID_FILE="${REPO_ROOT}/.harness/control-plane-web.pid"
+if [[ -f "${CP_PID_FILE}" ]]; then
+  CP_PID="$(cat "${CP_PID_FILE}" 2>/dev/null || true)"
+  if [[ -n "${CP_PID}" ]] && kill -0 "${CP_PID}" 2>/dev/null; then
+    kill "${CP_PID}" 2>/dev/null || true
+    echo "stage-down: stopped SE control-plane web UI (pid ${CP_PID})."
+  else
+    echo "stage-down: SE console PID file present but process not running (stale) — cleaning up."
+  fi
+  rm -f "${CP_PID_FILE}"
+else
+  echo "stage-down: no SE console PID file — nothing to stop."
+fi
+
 command -v docker >/dev/null 2>&1 || { echo "FATAL: docker not found on PATH." >&2; exit 2; }
 docker info >/dev/null 2>&1 || { echo "FATAL: Docker daemon not running." >&2; exit 2; }
 [[ -d "${DEMO_DIR}" ]] || { echo "FATAL: ${DEMO_DIR} missing." >&2; exit 2; }
