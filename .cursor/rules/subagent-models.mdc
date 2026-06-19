@@ -1,0 +1,63 @@
+---
+description: Select the right model for each subagent type — optimize for speed and cost
+alwaysApply: true
+---
+
+# Subagent Model Selection
+
+When launching subagents via the `Task` tool, always set the `model` parameter.
+Default (inheriting the parent model) is wasteful: expensive reasoning models do
+simple file reads; cheap fast models stall on complex code generation.
+
+## Model roster
+
+_Last verified: 2026-06-19. See **Maintenance** section below before trusting this table._
+
+| Slug | Strength | Cost/speed |
+|---|---|---|
+| `gpt-5.3-codex` | Code writing, editing, refactoring | Fast, cheap |
+| `composer-2.5-fast` | Read-only exploration, simple searches | Fastest, cheapest |
+| `composer-2.5` | General-purpose, moderate reasoning | Balanced |
+| `claude-4.6-sonnet-medium-thinking` | Planning, architecture, analysis | Medium |
+| `claude-4.6-opus-max` | Deep review, security audit, complex synthesis | Slow, expensive |
+
+## Assignment rules
+
+| Subagent type | Model to use |
+|---|---|
+| `explore` (read-only codebase exploration) | `composer-2.5-fast` |
+| `shell` (running commands, git operations) | `composer-2.5-fast` |
+| `generalPurpose` writing/editing code | `gpt-5.3-codex` |
+| `generalPurpose` planning / analysis | `composer-2.5` |
+| `bugbot` / `security-review` | `claude-4.6-opus-max` |
+| `best-of-n-runner` (isolated code experiments) | `gpt-5.3-codex` |
+
+## Do / Don't
+
+```
+✅ task("Explore the auth module", subagent_type="explore", model="composer-2.5-fast")
+✅ task("Refactor the checkout tool", subagent_type="generalPurpose", model="gpt-5.3-codex")
+✅ task("Plan the caching strategy", subagent_type="generalPurpose", model="composer-2.5")
+❌ Omitting `model` (inherits parent — often overkill for the subtask)
+❌ Using claude-4.6-opus-max for a simple file search
+❌ Using composer-2.5-fast for a nuanced architecture decision
+```
+
+## Escalation
+
+If a subagent returns an incomplete or incorrect result, re-run with one tier
+higher. Document the escalation reason in the agent journal.
+
+## Maintenance
+
+The model roster comes from Cursor's system prompt (the `Task` tool description),
+not from this repo. It changes when Cursor updates its model offerings.
+
+**Every agent that reads this rule must:**
+1. Compare the slugs above against the available model slugs listed in its own
+   `Task` tool description (visible in the system context).
+2. If they differ — new slugs present, old slugs missing — update the roster
+   table, update the _Last verified_ date, add a `CHANGELOG.md` entry, and
+   append an `agent-journal.md` entry before proceeding.
+3. Never use a slug that does not appear in the current `Task` tool description;
+   the call will silently fall back to the default model.

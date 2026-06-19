@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>SE Control-Plane UI</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <header>
+      <h1>SE Control-Plane UI</h1>
+      <p>Scenario list, play/reset/verify, playlist composer, and live logs.</p>
+    </header>
+
+    <main>
+      <section class="panel">
+        <h2>Scenarios</h2>
+        <button id="refresh-btn" type="button">Refresh Scenarios</button>
+        <div id="registry-errors" class="errors"></div>
+        <div id="scenario-list"></div>
+      </section>
+
+      <section class="panel">
+        <h2>Playlist Composer</h2>
+        <form id="playlist-form">
+          <label for="playlist-messages">Pillars (comma separated)</label>
+          <input id="playlist-messages" type="text" placeholder="invisible-failure, firewall" />
+          <label for="playlist-budget">Budget (minutes, optional)</label>
+          <input id="playlist-budget" type="number" min="1" />
+          <button type="submit">Compose Playlist</button>
+        </form>
+        <pre id="playlist-output"></pre>
+      </section>
+
+      <section class="panel">
+        <h2>Verify Controls</h2>
+        <form id="verify-form">
+          <label for="verify-scenario">Scenario ID</label>
+          <input id="verify-scenario" type="text" required />
+          <label for="verify-timeout">Timeout (seconds)</label>
+          <input id="verify-timeout" type="number" min="1" step="0.5" value="{{ default_timeout }}" />
+          <label for="verify-interval">Poll Interval (seconds)</label>
+          <input id="verify-interval" type="number" min="0.1" step="0.1" value="{{ default_interval }}" />
+          <button type="submit">Verify (SSE)</button>
+        </form>
+      </section>
+
+      <section class="panel">
+        <h2>Live Log Stream</h2>
+        <button id="clear-log-btn" type="button">Clear Log</button>
+        <pre id="live-log"></pre>
+      </section>
+    </main>
+
+    <script src="/static/app.js" defer></script>
+  </body>
+</html>

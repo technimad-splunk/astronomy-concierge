@@ -1,0 +1,531 @@
+from __future__ import annotations
+
+import asyncio
+import json
+import os
+import re
+import secrets
+import subprocess
+import sys
+import threading
+from dataclasses import asdict, dataclass
+from pathlib import Path
+from typing import Any, Callable
+from urllib.parse import urlsplit
+
+from dotenv import load_dotenv
+from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+from pydantic import BaseModel, Field
+from sse_starlette.sse import EventSourceResponse
+
+from control_plane.manifest import Scenario
+from control_plane.paths import REPO_ROOT
+from control_plane.registry import Registry, discover
+from control_plane.triggers import TriggerError, TriggerResult, apply_trigger, reset_trigger
+from control_plane.verification import (
+    DEFAULT_INTERVAL_S,
+    DEFAULT_TIMEOUT_S,
+    run_verification,
+)
+
+
+APP_DIR = Path(__file__).resolve().parent
+TEMPLATES = Jinja2Templates(directory=str(APP_DIR / "templates"))
+CSRF_COOKIE = "control_plane_csrf"
+CSRF_HEADER = "x-csrf-token"
+SECRET_PREFIXES = ("GALILEO_", "SPLUNK_", "OPENAI_")
+_SECRET_ENV_LINE_RE = re.compile(r"\b((?:GALILEO|SPLUNK|OPENAI)_[A-Z0-9_]+)\s*=\s*\S+")
+
+_STATUS_GLYPH = {
+    "pass": "PASS",
+    "fail": "FAIL",
+    "attested": "ATTESTED",
+    "unverifiable": "UNVERIFIED",
+    "error": "ERROR",
+}
+
+
+class PlayRequest(BaseModel):
+    id: str
+    prompt: str | None = None
+    session_id: str | None = None
+    no_drive: bool = False
+
+
+class ResetRequest(BaseModel):
+    id: str
+
+
+class VerifyRequest(BaseModel):
+    id: str
+    timeout: float = Field(default=DEFAULT_TIMEOUT_S, gt=0)
+    interval: float = Field(default=DEFAULT_INTERVAL_S, gt=0)
+
+
+class PlaylistRequest(BaseModel):
+    message: list[str] | None = None
+    budget: int | None = Field(default=None, gt=0)
+
+
+@dataclass
+class PlaySummary:
+    scenario_id: str
+    trigger_applied: bool
+    drive_attempted: bool
+    exit_code: int
+
+
+def _load_env() -> None:
+    load_dotenv(dotenv_path=REPO_ROOT / ".env")
+
+
+def _secret_values() -> list[str]:
+    values: list[str] = []
+    for key, value in os.environ.items():
+        if key.startswith(SECRET_PREFIXES) and value:
+            values.append(value)
+    return values
+
+
+def _redact_secret_like_content(text: str) -> str:
+    redacted = text
+    for value in _secret_values():
+        redacted = redacted.replace(value, "[REDACTED]")
+    return _SECRET_ENV_LINE_RE.sub(r"\1=[REDACTED]", redacted)
+
+
+def _loopback_origin(request: Request) -> str:
+    host = request.headers.get("host", "127.0.0.1")
+    return f"{request.url.scheme}://{host}"
+
+
+def _validate_same_origin(request: Request) -> None:
+    expected_origin = _loopback_origin(request)
+    origin = request.headers.get("origin")
+    if origin and origin != expected_origin:
+        raise HTTPException(status_code=403, detail="Cross-origin request rejected.")
+
+    referer = request.headers.get("referer")
+    if referer:
+        parsed = urlsplit(referer)
+        referer_origin = f"{parsed.scheme}://{parsed.netloc}"
+        if referer_origin != expected_origin:
+            raise HTTPException(status_code=403, detail="Cross-origin request rejected.")
+
+
+def _ensure_csrf_cookie(response: Response, request: Request) -> str:
+    existing = request.cookies.get(CSRF_COOKIE)
+    if existing:
+        return existing
+    token = secrets.token_urlsafe(32)
+    response.set_cookie(
+        key=CSRF_COOKIE,
+        value=token,
+        httponly=False,
+        samesite="strict",
+        secure=False,
+        path="/",
+    )
+    return token
+
+
+def _enforce_csrf(request: Request) -> None:
+    _validate_same_origin(request)
+    cookie_token = request.cookies.get(CSRF_COOKIE)
+    header_token = request.headers.get(CSRF_HEADER)
+    if not cookie_token or not header_token or cookie_token != header_token:
+        raise HTTPException(status_code=403, detail="CSRF validation failed.")
+
+
+def _enforce_csrf_query(request: Request, csrf_token: str | None) -> None:
+    _validate_same_origin(request)
+    cookie_token = request.cookies.get(CSRF_COOKIE)
+    if not cookie_token or not csrf_token or cookie_token != csrf_token:
+        raise HTTPException(status_code=403, detail="CSRF validation failed.")
+
+
+def _scenario_payload(s: Scenario) -> dict[str, Any]:
+    return {
+        "id": s.id,
+        "title": s.title,
+        "message": s.message,
+        "duration_min": s.duration_min,
+        "quiet_background": s.quiet_background,
+        "trigger": {
+            "type": s.trigger.type,
+            "ref": s.trigger.ref,
+            "params": dict(s.trigger.params),
+        },
+        "expected_signals": {
+            "galileo": list(s.expected_signals.galileo),
+            "splunk": list(s.expected_signals.splunk),
+        },
+        "talk_track": s.talk_track,
+        "reset": s.reset,
+    }
+
+
+def _registry_payload(reg: Registry) -> dict[str, Any]:
+    return {
+        "scenarios": [_scenario_payload(s) for s in reg.scenarios],
+        "errors": [{"folder": str(e.folder), "error": e.error} for e in reg.errors],
+    }
+
+
+def _trigger_result_lines(result: TriggerResult) -> list[str]:
+    lines = [
+        f"[{result.action}] {result.type} (ref={result.ref})",
+        result.summary,
+    ]
+    if result.before or result.after:
+        lines.append(f"state: {result.before!r} -> {result.after!r}")
+    lines.extend(result.details)
+    return lines
+
+
+def _compose_playlist(reg: Registry, req: PlaylistRequest) -> tuple[list[Scenario], int]:
+    scenarios = list(reg.scenarios)
+    if req.message:
+        wanted = set(req.message)
+        scenarios = [s for s in scenarios if s.message in wanted]
+    scenarios.sort(key=lambda s: (s.message, s.duration_min, s.id))
+
+    chosen: list[Scenario] = []
+    total = 0
+    for scenario in scenarios:
+        if req.budget is not None and total + scenario.duration_min > req.budget:
+            continue
+        chosen.append(scenario)
+        total += scenario.duration_min
+    return chosen, total
+
+
+def _run_loadgen(action: str, emit: Callable[[str], None]) -> bool:
+    script = REPO_ROOT / "scripts" / "loadgen.sh"
+    if not script.is_file():
+        emit(f"WARNING: {script} not found; skipping load-generator {action}.")
+        return False
+    proc = subprocess.run(
+        ["bash", str(script), action],
+        cwd=str(REPO_ROOT),
+        capture_output=True,
+        text=True,
+    )
+    output = (proc.stdout or "") + (proc.stderr or "")
+    for line in output.splitlines():
+        emit(_redact_secret_like_content(line))
+    return proc.returncode == 0
+
+
+def _stream_agent(prompt: str, session_id: str, emit: Callable[[str], None]) -> int:
+    cmd = [sys.executable, "-m", "agent", "--prompt", prompt, "--session-id", session_id]
+    emit(f"Driving agent (session={session_id})")
+    proc = subprocess.Popen(
+        cmd,
+        cwd=str(REPO_ROOT),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    )
+    assert proc.stdout is not None
+    for raw_line in proc.stdout:
+        emit(_redact_secret_like_content(raw_line.rstrip()))
+    return proc.wait()
+
+
+def _run_play(req: PlayRequest, emit: Callable[[str], None]) -> PlaySummary:
+    reg = discover()
+    try:
+        scenario = reg.get(req.id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    emit(f"Playing '{scenario.id}' — {scenario.title}")
+    emit(f"message={scenario.message} trigger={scenario.trigger.type}")
+
+    if scenario.quiet_background:
+        emit("Quiet-background mode enabled: draining load-generator.")
+        if not _run_loadgen("quiet", emit):
+            emit("WARNING: load-generator quiet action returned non-zero; continuing.")
+
+    try:
+        trigger_result = apply_trigger(scenario)
+    except TriggerError as exc:
+        raise HTTPException(status_code=500, detail=f"trigger apply failed: {exc}") from exc
+
+    emit("Trigger applied:")
+    for line in _trigger_result_lines(trigger_result):
+        emit(line)
+
+    prompt = req.prompt or scenario.trigger.params.get("drive_prompt")
+    if req.no_drive or not prompt:
+        if not req.no_drive and not prompt:
+            emit("No prompt configured; trigger applied only.")
+        return PlaySummary(
+            scenario_id=scenario.id,
+            trigger_applied=True,
+            drive_attempted=False,
+            exit_code=0,
+        )
+
+    session_id = req.session_id or f"play-{scenario.id}"
+    exit_code = _stream_agent(prompt=prompt, session_id=session_id, emit=emit)
+    if exit_code != 0:
+        emit(f"WARNING: agent exited with code {exit_code}.")
+    return PlaySummary(
+        scenario_id=scenario.id,
+        trigger_applied=True,
+        drive_attempted=True,
+        exit_code=exit_code,
+    )
+
+
+def _run_reset(req: ResetRequest, emit: Callable[[str], None]) -> int:
+    reg = discover()
+    try:
+        scenario = reg.get(req.id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    emit(f"Resetting '{scenario.id}' — {scenario.title}")
+    rc = 0
+
+    try:
+        result = reset_trigger(scenario)
+        emit("Trigger reset:")
+        for line in _trigger_result_lines(result):
+            emit(line)
+    except TriggerError as exc:
+        emit(f"ERROR: trigger reset failed: {exc}")
+        rc = 1
+
+    reset_script = scenario.reset_path(REPO_ROOT)
+    if reset_script.is_file():
+        emit(f"Running per-scenario reset script: {reset_script}")
+        proc = subprocess.run(
+            ["bash", str(reset_script)],
+            cwd=str(REPO_ROOT),
+            capture_output=True,
+            text=True,
+        )
+        output = (proc.stdout or "") + (proc.stderr or "")
+        for line in output.splitlines():
+            emit(_redact_secret_like_content(line))
+        if proc.returncode != 0:
+            emit(f"WARNING: reset script exited with {proc.returncode}.")
+            rc = rc or proc.returncode
+    else:
+        emit("No reset.sh found; trigger-level reset is authoritative.")
+
+    emit("Restoring load-generator (idempotent).")
+    if not _run_loadgen("restore", emit):
+        emit("WARNING: load-generator restore action returned non-zero; continuing.")
+    return rc
+
+
+def create_app() -> FastAPI:
+    _load_env()
+
+    app = FastAPI(title="SE Control-Plane Web UI", version="0.1.0")
+    app.mount("/static", StaticFiles(directory=str(APP_DIR / "static")), name="static")
+
+    @app.middleware("http")
+    async def apply_security_headers(request: Request, call_next):
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Referrer-Policy"] = "same-origin"
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; "
+            "script-src 'self'; "
+            "style-src 'self'; "
+            "img-src 'self' data:; "
+            "connect-src 'self'; "
+            "object-src 'none'; "
+            "frame-ancestors 'none'; "
+            "base-uri 'self'; "
+            "form-action 'self'"
+        )
+        return response
+
+    @app.get("/", response_class=HTMLResponse)
+    async def index(request: Request):
+        response = TEMPLATES.TemplateResponse(
+            request,
+            "index.html",
+            {
+                "default_timeout": DEFAULT_TIMEOUT_S,
+                "default_interval": DEFAULT_INTERVAL_S,
+            },
+        )
+        _ensure_csrf_cookie(response, request)
+        return response
+
+    @app.get("/healthz")
+    async def healthz() -> dict[str, str]:
+        return {"status": "ok"}
+
+    @app.get("/api/list")
+    async def api_list() -> dict[str, Any]:
+        return _registry_payload(discover())
+
+    @app.post("/api/play")
+    async def api_play(request: Request, payload: PlayRequest):
+        _enforce_csrf(request)
+        lines: list[str] = []
+        summary = _run_play(payload, lines.append)
+        return {
+            "summary": asdict(summary),
+            "output": [_redact_secret_like_content(line) for line in lines],
+        }
+
+    @app.get("/api/play/stream")
+    async def api_play_stream(
+        id: str,
+        request: Request,
+        prompt: str | None = None,
+        session_id: str | None = None,
+        no_drive: bool = False,
+        csrf_token: str | None = None,
+    ):
+        _enforce_csrf_query(request, csrf_token)
+        req = PlayRequest(id=id, prompt=prompt, session_id=session_id, no_drive=no_drive)
+        loop = asyncio.get_running_loop()
+        queue: asyncio.Queue[tuple[str, str] | None] = asyncio.Queue()
+
+        def emit(message: str) -> None:
+            loop.call_soon_threadsafe(queue.put_nowait, ("log", _redact_secret_like_content(message)))
+
+        def worker() -> None:
+            try:
+                summary = _run_play(req, emit)
+                payload = {
+                    "ok": summary.exit_code == 0,
+                    "summary": asdict(summary),
+                }
+                loop.call_soon_threadsafe(queue.put_nowait, ("done", json.dumps(payload)))
+            except HTTPException as exc:
+                payload = {"status": exc.status_code, "detail": exc.detail}
+                loop.call_soon_threadsafe(queue.put_nowait, ("error", json.dumps(payload)))
+            except Exception as exc:  # pragma: no cover - defensive
+                payload = {"status": 500, "detail": _redact_secret_like_content(str(exc))}
+                loop.call_soon_threadsafe(queue.put_nowait, ("error", json.dumps(payload)))
+            finally:
+                loop.call_soon_threadsafe(queue.put_nowait, None)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+        async def event_gen():
+            while True:
+                item = await queue.get()
+                if item is None:
+                    break
+                event, data = item
+                yield {"event": event, "data": data}
+
+        return EventSourceResponse(event_gen())
+
+    @app.post("/api/reset")
+    async def api_reset(request: Request, payload: ResetRequest):
+        _enforce_csrf(request)
+        lines: list[str] = []
+        exit_code = _run_reset(payload, lines.append)
+        return {"ok": exit_code == 0, "exit_code": exit_code, "output": lines}
+
+    @app.post("/api/verify")
+    async def api_verify(request: Request, payload: VerifyRequest):
+        _enforce_csrf(request)
+        reg = discover()
+        try:
+            scenario = reg.get(payload.id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+        report = run_verification(
+            scenario,
+            timeout_s=payload.timeout,
+            interval_s=payload.interval,
+        )
+        return {
+            "overall_pass": report.overall_pass,
+            "scenario_id": report.scenario_id,
+            "results": [asdict(r) for r in report.results],
+        }
+
+    @app.get("/api/verify/stream")
+    async def api_verify_stream(
+        request: Request,
+        id: str,
+        timeout: float = DEFAULT_TIMEOUT_S,
+        interval: float = DEFAULT_INTERVAL_S,
+        csrf_token: str | None = None,
+    ):
+        _enforce_csrf_query(request, csrf_token)
+        reg = discover()
+        try:
+            scenario = reg.get(id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+        interval = max(interval, 0.1)
+
+        async def event_gen():
+            yield {
+                "event": "log",
+                "data": f"Verifying '{scenario.id}' (timeout={timeout}s, interval={interval}s)",
+            }
+            verify_task = asyncio.create_task(
+                asyncio.to_thread(
+                    run_verification,
+                    scenario,
+                    timeout_s=timeout,
+                    interval_s=interval,
+                )
+            )
+            while not verify_task.done():
+                yield {"event": "log", "data": "Polling Galileo/Splunk verification hooks..."}
+                await asyncio.sleep(interval)
+
+            report = await verify_task
+            for result in report.results:
+                detail = f"{result.backend}:{result.signal} -> {_STATUS_GLYPH[result.status]}"
+                yield {"event": "log", "data": detail}
+                if result.detail:
+                    for line in result.detail.splitlines():
+                        yield {"event": "log", "data": _redact_secret_like_content(line)}
+
+            summary = {
+                "overall_pass": report.overall_pass,
+                "scenario_id": report.scenario_id,
+                "totals": {
+                    "pass": len(report.passed),
+                    "fail_error": len(report.failed),
+                    "attested": len(report.attested),
+                    "unverified": len(report.unverifiable),
+                },
+            }
+            yield {"event": "done", "data": json.dumps(summary)}
+
+        return EventSourceResponse(event_gen())
+
+    @app.post("/api/playlist")
+    async def api_playlist(request: Request, payload: PlaylistRequest):
+        _enforce_csrf(request)
+        reg = discover()
+        chosen, total = _compose_playlist(reg, payload)
+        return {
+            "total_duration_min": total,
+            "count": len(chosen),
+            "scenarios": [_scenario_payload(s) for s in chosen],
+        }
+
+    @app.exception_handler(HTTPException)
+    async def http_error_handler(_: Request, exc: HTTPException):
+        return JSONResponse(status_code=exc.status_code, content={"detail": str(exc.detail)})
+
+    return app

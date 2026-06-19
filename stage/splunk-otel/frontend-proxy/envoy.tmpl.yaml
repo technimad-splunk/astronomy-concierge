@@ -1,0 +1,350 @@
+# OUR tracked frontend-proxy (Envoy) override.
+#
+# This is a copy of the vendored demo's src/frontend-proxy/envoy.tmpl.yaml
+# (open-telemetry/opentelemetry-demo, pinned via stage/demo.ref) with ONE
+# addition: an `envoy.filters.http.lua` filter that injects the Astronomy
+# Concierge bridge <script> into storefront HTML responses. Everything else is
+# verbatim from upstream so the proxy keeps its routing, tracing, fault filter,
+# and access logging.
+#
+# Why a full copy (not a patch): the demo has no additive seam for Envoy config
+# the way the collector has `otelcol-config-extras.yml`. The proxy entrypoint
+# runs `envsubst < envoy.tmpl.yaml > envoy.yaml`, so we mount THIS file over
+# /home/envoy/envoy.tmpl.yaml via the compose override
+# (stage/splunk-otel/docker-compose.override.yml) WITHOUT editing the vendored
+# clone in place. `${...}` placeholders are filled by the proxy container's
+# environment at start; we add `${CONCIERGE_WEB_PORT}` (default 8090) to that
+# environment so the injected script points at the concierge's browser origin.
+#
+# The injected script runs on the storefront's OWN origin (:8080), so it can
+# read the shopper session the storefront keeps in localStorage (per-origin,
+# not shareable across ports) and mirror it into a `concierge_session` cookie on
+# host `localhost` (port-agnostic), which the concierge UI on :8090 then reads.
+# That bridges the cart across the two tabs. It also async-loads the fuller
+# bridge served by the concierge (/embed/concierge-bridge.js), the future hook
+# for embedding the concierge widget into the shop UI.
+
+static_resources:
+  listeners:
+    - address:
+        socket_address:
+          address: "${ENVOY_ADDR}"
+          port_value: ${ENVOY_PORT}
+      filter_chains:
+        - filters:
+            - name: envoy.filters.network.http_connection_manager
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                codec_type: AUTO
+                stat_prefix: ingress_http
+                tracing:
+                  spawn_upstream_span: true
+                  provider:
+                    name: envoy.tracers.opentelemetry
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.config.trace.v3.OpenTelemetryConfig
+                      grpc_service:
+                        envoy_grpc:
+                          cluster_name: opentelemetry_collector_grpc
+                        timeout: 0.250s
+                      service_name: ${OTEL_SERVICE_NAME}
+                      resource_detectors:
+                        - name: envoy.tracers.opentelemetry.resource_detectors.environment
+                          typed_config:
+                            "@type": type.googleapis.com/envoy.extensions.tracers.opentelemetry.resource_detectors.v3.EnvironmentResourceDetectorConfig
+                route_config:
+                  name: local_route
+                  virtual_hosts:
+                    - name: frontend
+                      domains:
+                        - "*"
+                      routes:
+                        - match: { path: "/loadgen" }
+                          redirect: { path_redirect: "/loadgen/" }
+                        - match: { prefix: "/loadgen/" }
+                          route: { cluster: loadgen, prefix_rewrite: "/" }
+                        - match: { prefix: "/otlp-http/" }
+                          route: { cluster: opentelemetry_collector_http, prefix_rewrite: "/" }
+                        - match: { path: "/jaeger" }
+                          redirect: { path_redirect: "/jaeger/" }
+                        - match: { prefix: "/jaeger/" }
+                          route: { cluster: jaeger }
+                        - match: { path: "/grafana" }
+                          redirect: { path_redirect: "/grafana/" }
+                        - match: { prefix: "/grafana/" }
+                          route: { cluster: grafana }
+                        - match: { prefix: "/images/" }
+                          route: { cluster: image-provider, prefix_rewrite: "/" }
+                        - match: { prefix: "/flagservice/" }
+                          route: { cluster: flagservice, prefix_rewrite: "/", timeout: 0s }
+                        - match: { prefix: "/feature" }
+                          route:
+                            cluster: flagd-ui
+                            prefix_rewrite: "/"
+                            upgrade_configs:
+                              - upgrade_type: websocket
+                        - match: { prefix: "/" }  # Default/catch-all route - keep last since prefix:"/" matches everything
+                          route: { cluster: frontend }
+                http_filters:
+                  - name: envoy.filters.http.fault
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.fault.v3.HTTPFault
+                      max_active_faults: 100
+                      delay:
+                        header_delay: {}
+                        percentage:
+                          numerator: 100
+                  # OUR addition: inject the concierge bridge <script> into
+                  # storefront HTML documents only. Non-HTML, compressed, and
+                  # non-storefront (grafana/jaeger/api/...) responses are left
+                  # untouched. Must run before the router filter.
+                  - name: envoy.filters.http.lua
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.lua.v3.Lua
+                      default_source_code:
+                        inline_string: |
+                          -- Paths whose HTML we must NOT touch (observability
+                          -- UIs, the demo API, static images, feature flag UI).
+                          local SKIP_PREFIXES = {
+                            "/grafana", "/jaeger", "/loadgen", "/feature",
+                            "/otlp-http", "/flagservice", "/api/", "/images/"
+                          }
+
+                          function envoy_on_request(handle)
+                            local path = handle:headers():get(":path") or ""
+                            local skip = false
+                            for _, p in ipairs(SKIP_PREFIXES) do
+                              if string.sub(path, 1, string.len(p)) == p then
+                                skip = true
+                                break
+                              end
+                            end
+                            handle:streamInfo():dynamicMetadata():set(
+                              "concierge.bridge", "skip", skip)
+                            if not skip then
+                              local accept = handle:headers():get("accept")
+                              if accept ~= nil and string.find(accept, "text/html", 1, true) then
+                                -- Get an uncompressed document so we can edit it.
+                                handle:headers():remove("accept-encoding")
+                              end
+                            end
+                          end
+
+                          function envoy_on_response(handle)
+                            local md = handle:streamInfo():dynamicMetadata():get("concierge.bridge")
+                            if md ~= nil and md["skip"] == true then
+                              return
+                            end
+                            local headers = handle:headers()
+                            local ctype = headers:get("content-type")
+                            if ctype == nil or not string.find(ctype, "text/html", 1, true) then
+                              return
+                            end
+                            local cenc = headers:get("content-encoding")
+                            if cenc ~= nil and cenc ~= "" then
+                              return
+                            end
+                            local body = handle:body()
+                            if body == nil then
+                              return
+                            end
+                            local content = body:getBytes(0, body:length())
+                            if content == nil then
+                              return
+                            end
+                            local snippet = [==[<script data-concierge-bridge="bootstrap">
+                          (function(){try{var K="concierge_session";function gc(n){var m=document.cookie.match(new RegExp("(?:^|; )"+n+"=([^;]*)"));return m?decodeURIComponent(m[1]):"";}function sc(n,v){document.cookie=n+"="+encodeURIComponent(v)+"; path=/; SameSite=Lax";}var cid=gc(K);var raw=null;try{raw=window.localStorage.getItem("session");}catch(e){}var s=null;if(raw){try{s=JSON.parse(raw);}catch(e){}}var lid=(s&&s.userId)?s.userId:"";if(lid&&!cid){sc(K,lid);}else if(cid&&!lid){try{window.localStorage.setItem("session",JSON.stringify({userId:cid,currencyCode:(s&&s.currencyCode)||"USD"}));}catch(e){}}else if(cid&&lid&&cid!==lid){sc(K,lid);}var w=document.createElement("script");w.src="http://localhost:${CONCIERGE_WEB_PORT}/embed/concierge-bridge.js";w.async=true;w.onerror=function(){};(document.head||document.documentElement).appendChild(w);}catch(e){}})();
+                          </script>]==]
+                            local pos = string.find(content, "</head>", 1, true)
+                            local updated
+                            if pos ~= nil then
+                              updated = string.sub(content, 1, pos - 1) .. snippet .. string.sub(content, pos)
+                            else
+                              updated = snippet .. content
+                            end
+                            body:setBytes(updated)
+                          end
+                  - name: envoy.filters.http.router
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+                access_log:
+                  - name: envoy.access_loggers.open_telemetry
+                    typed_config:
+                      "@type": "type.googleapis.com/envoy.extensions.access_loggers.open_telemetry.v3.OpenTelemetryAccessLogConfig"
+                      common_config:
+                        log_name: "otel_envoy_access_log"
+                        grpc_service:
+                          envoy_grpc:
+                            cluster_name: opentelemetry_collector_grpc
+                        transport_api_version: "V3"
+                      body:
+                        # yamllint disable-line rule:line-length
+                        string_value: "[%START_TIME%] \"%REQ(:METHOD)% %REQ(X-ENVOY-ORIGINAL-PATH?:PATH)% %PROTOCOL%\" %RESPONSE_CODE% %RESPONSE_FLAGS% %RESPONSE_CODE_DETAILS% %CONNECTION_TERMINATION_DETAILS% \"%UPSTREAM_TRANSPORT_FAILURE_REASON%\" %BYTES_RECEIVED% %BYTES_SENT% %DURATION% %RESP(X-ENVOY-UPSTREAM-SERVICE-TIME)% \"%REQ(X-FORWARDED-FOR)%\" \"%REQ(USER-AGENT)%\" \"%REQ(X-REQUEST-ID)%\" \"%REQ(:AUTHORITY)%\" \"%UPSTREAM_HOST%\" %UPSTREAM_CLUSTER% %UPSTREAM_LOCAL_ADDRESS% %DOWNSTREAM_LOCAL_ADDRESS% %DOWNSTREAM_REMOTE_ADDRESS% %REQUESTED_SERVER_NAME% %ROUTE_NAME%\n"
+                      resource_attributes:
+                        values:
+                          - key: "service.name"
+                            value:
+                              string_value: ${OTEL_SERVICE_NAME}
+                      attributes:
+                        values:
+                          - key: "destination.address"
+                            value:
+                              string_value: "%UPSTREAM_REMOTE_ADDRESS_WITHOUT_PORT%"
+                          - key: "event.name"
+                            value:
+                              string_value: "proxy.access"
+                          - key: "server.address"
+                            value:
+                              string_value: "%DOWNSTREAM_LOCAL_ADDRESS%"
+                          - key: "source.address"
+                            value:
+                              string_value: "%DOWNSTREAM_REMOTE_ADDRESS_WITHOUT_PORT%"
+                          - key: "upstream.cluster"
+                            value:
+                              string_value: "%UPSTREAM_CLUSTER%"
+                          - key: "upstream.host"
+                            value:
+                              string_value: "%UPSTREAM_HOST%"
+                          - key: "user_agent.original"
+                            value:
+                              string_value: "%REQ(USER-AGENT)%"
+                          - key: "url.full"
+                            value:
+                              string_value: "%REQ(:SCHEME)%://%REQ(:AUTHORITY)%%REQ(:PATH)%"
+                          - key: "url.path"
+                            value:
+                              string_value: "%REQ(:PATH)%"
+                          - key: "url.query"
+                            value:
+                              string_value: "%REQ(:QUERY)%"
+                          - key: "url.template"
+                            value:
+                              string_value: "%ROUTE_NAME%"
+  clusters:
+    - name: opentelemetry_collector_grpc
+      type: STRICT_DNS
+      lb_policy: ROUND_ROBIN
+      typed_extension_protocol_options:
+        envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
+          "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
+          explicit_http_config:
+            http2_protocol_options: {}
+      load_assignment:
+        cluster_name: opentelemetry_collector_grpc
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: ${OTEL_COLLECTOR_HOST}
+                      port_value: ${OTEL_COLLECTOR_PORT_GRPC}
+    - name: opentelemetry_collector_http
+      type: STRICT_DNS
+      lb_policy: ROUND_ROBIN
+      load_assignment:
+        cluster_name: opentelemetry_collector_http
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: ${OTEL_COLLECTOR_HOST}
+                      port_value: ${OTEL_COLLECTOR_PORT_HTTP}
+    - name: frontend
+      type: STRICT_DNS
+      lb_policy: ROUND_ROBIN
+      load_assignment:
+        cluster_name: frontend
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: ${FRONTEND_HOST}
+                      port_value: ${FRONTEND_PORT}
+    - name: image-provider
+      type: STRICT_DNS
+      lb_policy: ROUND_ROBIN
+      load_assignment:
+        cluster_name: image-provider
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: ${IMAGE_PROVIDER_HOST}
+                      port_value: ${IMAGE_PROVIDER_PORT}
+    - name: flagservice
+      type: STRICT_DNS
+      lb_policy: ROUND_ROBIN
+      load_assignment:
+        cluster_name: flagservice
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: ${FLAGD_HOST}
+                      port_value: ${FLAGD_PORT}
+    - name: flagd-ui
+      type: STRICT_DNS
+      lb_policy: ROUND_ROBIN
+      load_assignment:
+        cluster_name: flagd-ui
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: ${FLAGD_UI_HOST}
+                      port_value: ${FLAGD_UI_PORT}
+    - name: loadgen
+      type: STRICT_DNS
+      lb_policy: ROUND_ROBIN
+      load_assignment:
+        cluster_name: loadgen
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: ${LOCUST_WEB_HOST}
+                      port_value: ${LOCUST_WEB_PORT}
+    - name: grafana
+      type: STRICT_DNS
+      lb_policy: ROUND_ROBIN
+      load_assignment:
+        cluster_name: grafana
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: ${GRAFANA_HOST}
+                      port_value: ${GRAFANA_PORT}
+    - name: jaeger
+      type: STRICT_DNS
+      lb_policy: ROUND_ROBIN
+      load_assignment:
+        cluster_name: jaeger
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: ${JAEGER_HOST}
+                      port_value: ${JAEGER_UI_PORT}
+admin:
+  address:
+    socket_address:
+      address: 0.0.0.0
+      port_value: ${ENVOY_ADMIN_PORT}
+layered_runtime:
+  layers:
+    - name: static_layer_0
+      static_layer:
+        envoy:
+          resource_limits:
+            listener:
+              example_listener_name:
+                connection_limit: 10000

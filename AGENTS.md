@@ -13,6 +13,8 @@ This file is the entry point for any agent (or human) wanting to understand how 
 | 3 | Git hygiene: disciplined commits, branches, merges | [`.cursor/rules/git-hygiene.mdc`](.cursor/rules/git-hygiene.mdc) | git history |
 | 4 | Capture agent actions and decisions | [`.cursor/rules/agent-journal.mdc`](.cursor/rules/agent-journal.mdc) | [`docs/agent-journal.md`](docs/agent-journal.md) |
 | 5 | Automate and verify before declaring work done | [`.cursor/rules/automate-verify.mdc`](.cursor/rules/automate-verify.mdc) | `scripts/` (as it grows) |
+| 6 | Use the right model for each subagent (speed & cost) | [`.cursor/rules/subagent-models.mdc`](.cursor/rules/subagent-models.mdc) | Task tool `model` parameter |
+| 7 | Isolate parallel writing subagents with worktrees | [`.cursor/rules/subagent-worktrees.mdc`](.cursor/rules/subagent-worktrees.mdc) | `best-of-n-runner` branches |
 
 ---
 

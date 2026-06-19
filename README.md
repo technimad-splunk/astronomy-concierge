@@ -166,3 +166,45 @@ own traces in Splunk APM stay green — but Galileo's Context Adherence drops an
 pinpoints the ungrounded claim. See the full talk track at
 [`scenarios/invisible-failure/captions/invisible-failure.md`](scenarios/invisible-failure/captions/invisible-failure.md).
 
+### Web interfaces (Phase 7)
+
+Two optional browser surfaces wrap the same cores — built as thin web layers over
+the unchanged `agent/` and `control_plane/` packages. **The CLIs above remain
+supported fallbacks.**
+
+```sh
+scripts/concierge-serve.sh        # shopper-facing Astronomy Concierge chat on :8090
+scripts/control-plane-web.sh      # SE control-plane UI, loopback-only on 127.0.0.1:8099
+```
+
+**All interfaces at a glance** (once `scripts/stage-up.sh` is running and the two web
+apps are started):
+
+| Surface | URL |
+|---|---|
+| Astronomy Shop storefront | http://localhost:8080/ |
+| Astronomy Concierge chat | http://localhost:8090/ |
+| SE Control-Plane UI (loopback-only) | http://127.0.0.1:8099/ |
+| Feature-flag (flagd) UI | http://localhost:8080/feature |
+| Jaeger local trace view | http://localhost:8080/jaeger/ui/ |
+| Splunk Observability (APM / AI Agent Monitoring) | your Observability Cloud realm |
+| Galileo console | value of `GALILEO_CONSOLE_URL` (project/log-stream from `.env`) |
+
+The concierge container talks to a **native** Ollama on the host
+(`host.docker.internal:11434`); confirm your `OLLAMA_MODEL` is pulled.
+
+- **Astronomy Concierge** — a standalone chat app (FastAPI + React/Vite frontend,
+  containerized) over the Phase-2 agent; preserves the `gen_ai.*` spans + GenAI
+  histograms (Splunk) and Galileo Sessions→Traces→Spans.
+- **Control-plane web UI** — a FastAPI layer over the Phase-3 harness
+  (`list/play/reset/verify/playlist` with live SSE output); **bound to
+  `127.0.0.1` only** because it triggers faults.
+
+> **Status:** Phases 7.0–7.4 are implemented and verified at the static/integration
+> level (both apps boot, the loopback guard rejects non-loopback binds, all
+> scenarios still discover with no core edits, the frontend builds). The **live
+> clean-room sign-off and full Installation/Example-usage steps are finalized in
+> Phase 7.5** (not yet complete). See
+> [`docs/web-interface-plan.md`](docs/web-interface-plan.md) and
+> [`web/README.md`](web/README.md).
+

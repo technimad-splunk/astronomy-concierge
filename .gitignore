@@ -35,6 +35,8 @@ dist/
 build/
 .next/
 out/
+web/**/frontend/node_modules/
+web/**/frontend/dist/
 
 # ── Python ─────────────────────────────────────────────────────────────────────
 __pycache__/

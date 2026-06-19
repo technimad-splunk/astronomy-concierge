@@ -1,0 +1,59 @@
+---
+description: Use worktree-isolated subagents for parallel writes — prevent interference and remove manual file-ownership tracking
+alwaysApply: true
+---
+
+# Subagent Worktree Isolation
+
+When multiple subagents write to the filesystem concurrently, they collide:
+the last writer wins, partial edits interleave, and the coordinating agent must
+manually track which files each subagent is "allowed" to touch. Avoid all of
+this by giving each writing subagent its own git worktree.
+
+## The right tool: `best-of-n-runner`
+
+`best-of-n-runner` is Cursor's only subagent type that automatically provisions
+an isolated git worktree on a fresh branch. Use it for **any subagent that
+writes files**, not just "best of N" experiments.
+
+The coordinator's job then becomes: review the branch diffs and merge, not
+police file ownership.
+
+## Decision rule
+
+```
+Does the subagent need to write or modify any file?
+  NO  → use explore / shell / generalPurpose as normal (no worktree needed)
+  YES → is only ONE subagent writing at this time?
+          YES → generalPurpose is fine (no collision risk)
+          NO  → use best-of-n-runner for EACH parallel writer
+```
+
+## Workflow
+
+```
+1. Coordinator decomposes work into independent write tasks.
+2. Each writing task → best-of-n-runner on its own branch.
+   model: gpt-5.3-codex  (see subagent-models.mdc)
+3. Subagents complete; coordinator reviews each branch diff.
+4. Coordinator merges branches into main (resolving any true conflicts).
+5. Single commit per logical change; no "merge mess" from interleaved writes.
+```
+
+## Do / Don't
+
+```
+✅ Parallel feature work:
+   task("Implement auth module",  subagent_type="best-of-n-runner", model="gpt-5.3-codex")
+   task("Implement billing module", subagent_type="best-of-n-runner", model="gpt-5.3-codex")
+
+❌ Two generalPurpose agents editing overlapping files simultaneously
+❌ Coordinator maintaining a mental "file lock" list to prevent collisions
+❌ Sequential execution of tasks that could safely run in parallel
+```
+
+## After merge
+
+- Delete the worktree branch once merged.
+- Record the branch names and merge rationale in `docs/agent-journal.md` if
+  the decomposition involved a non-obvious trade-off.

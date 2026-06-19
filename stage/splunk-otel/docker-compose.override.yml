@@ -9,6 +9,21 @@
 # at our tracked file instead of the upstream placeholder.
 
 services:
+  frontend-proxy:
+    # Mount OUR Envoy template over the image's baked one so the proxy injects
+    # the Astronomy Concierge bridge <script> into storefront HTML responses
+    # (cart sharing across the storefront :8080 and concierge :8090 tabs). The
+    # proxy entrypoint runs `envsubst < envoy.tmpl.yaml > envoy.yaml`, so
+    # ${CONCIERGE_WEB_PORT} below is substituted into the injected script's src.
+    # This overrides the vendored config at RUNTIME via a bind mount — it does
+    # NOT edit the gitignored clone in place. The path is relative to the clone
+    # dir where compose runs (../../ -> repo root), matching the concierge-web
+    # build context below.
+    volumes:
+      - ../../stage/splunk-otel/frontend-proxy/envoy.tmpl.yaml:/home/envoy/envoy.tmpl.yaml:ro
+    environment:
+      - CONCIERGE_WEB_PORT=${CONCIERGE_WEB_PORT:-8090}
+
   otel-collector:
     # Publish the collector's OTLP receiver on STABLE host ports so the Phase-2
     # concierge agent — which runs on the host, not in compose — can export to it
@@ -22,3 +37,34 @@ services:
     environment:
       - SPLUNK_ACCESS_TOKEN=${SPLUNK_ACCESS_TOKEN}
       - SPLUNK_REALM=${SPLUNK_REALM}
+
+  concierge-web:
+    build:
+      context: ../..
+      dockerfile: web/concierge/Dockerfile
+    depends_on:
+      - frontend-proxy
+      - otel-collector
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      - MODEL_PROVIDER=${MODEL_PROVIDER:-ollama}
+      - MODEL_TEMPERATURE=${MODEL_TEMPERATURE:-0.0}
+      - OLLAMA_HOST=http://host.docker.internal:11434
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-llama3.1:8b}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
+      - STORE_BASE_URL=http://frontend-proxy:8080
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+      - OTEL_SERVICE_NAME=${OTEL_SERVICE_NAME:-astronomy-concierge}
+      - DEPLOYMENT_ENVIRONMENT=${DEPLOYMENT_ENVIRONMENT:-local-agent-galileo}
+      - SPLUNK_OTLP_DISABLED=${SPLUNK_OTLP_DISABLED:-0}
+      - GALILEO_API_KEY=${GALILEO_API_KEY}
+      - GALILEO_PROJECT=${GALILEO_PROJECT}
+      - GALILEO_LOG_STREAM=${GALILEO_LOG_STREAM}
+      - GALILEO_CONSOLE_URL=${GALILEO_CONSOLE_URL}
+      - GALILEO_OTEL_EXPORT=${GALILEO_OTEL_EXPORT:-0}
+      - WEB_ALLOWED_ORIGIN=${WEB_ALLOWED_ORIGIN:-http://localhost:8080}
+      - CONCIERGE_API_URL=${CONCIERGE_API_URL:-http://localhost:8090}
+    ports:
+      - "${CONCIERGE_WEB_PORT:-8090}:8090"

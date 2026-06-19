@@ -1,0 +1,33 @@
+# Build-context hygiene for web/concierge/Dockerfile (context = repo root).
+# Keep the context small and free of secrets. The Dockerfile only COPYs
+# pyproject.toml, README.md, agent/, control_plane/, scripts/, web/.
+
+# Secrets — never ship to the daemon/image
+.env
+.env.*
+!.env.example
+
+# Local Python venv (image installs its own deps)
+.venv/
+
+# VCS + tooling
+.git/
+.harness/
+
+# Vendored demo clone (huge; not needed in the image)
+stage/opentelemetry-demo/
+
+# Node deps + prebuilt bundle (the frontend-build stage runs `npm ci`)
+**/node_modules/
+web/concierge/frontend/dist/
+
+# Python caches
+**/__pycache__/
+**/*.py[cod]
+
+# Agent runtime overlay state (gitignored)
+agent/_overlay/
+
+# Editor / OS cruft
+*.log
+.DS_Store

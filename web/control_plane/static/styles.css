@@ -1,0 +1,78 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  margin: 0;
+  background: #0f172a;
+  color: #e2e8f0;
+}
+
+header {
+  padding: 1rem 1.5rem;
+  border-bottom: 1px solid #334155;
+}
+
+main {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 1rem;
+  padding: 1rem 1.5rem 1.5rem;
+}
+
+.panel {
+  background: #111827;
+  border: 1px solid #334155;
+  border-radius: 8px;
+  padding: 0.9rem;
+}
+
+.scenario-card {
+  border: 1px solid #475569;
+  border-radius: 8px;
+  padding: 0.75rem;
+  margin: 0.75rem 0;
+}
+
+label {
+  display: block;
+  margin: 0.45rem 0 0.2rem;
+  font-size: 0.92rem;
+}
+
+input,
+button {
+  width: 100%;
+  padding: 0.5rem;
+  border-radius: 6px;
+  border: 1px solid #64748b;
+  background: #0b1220;
+  color: #e2e8f0;
+}
+
+button {
+  cursor: pointer;
+  margin-top: 0.5rem;
+}
+
+.actions {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.5rem;
+}
+
+.errors {
+  white-space: pre-wrap;
+  color: #fecaca;
+}
+
+pre {
+  background: #020617;
+  border: 1px solid #334155;
+  border-radius: 6px;
+  min-height: 180px;
+  padding: 0.75rem;
+  overflow: auto;
+  white-space: pre-wrap;
+}

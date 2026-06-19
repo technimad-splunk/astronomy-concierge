@@ -58,6 +58,39 @@ SPLUNK_REALM="$(read_env_var SPLUNK_REALM)"
 [[ -n "${SPLUNK_REALM}" ]] || { echo "FATAL: SPLUNK_REALM is empty in ${ENV_FILE}." >&2; exit 2; }
 export SPLUNK_ACCESS_TOKEN SPLUNK_REALM
 
+# --- Export concierge-web vars so compose ${...} substitution sees them -------
+# The concierge-web service in docker-compose.override.yml references these via
+# ${VAR} interpolation, which compose resolves from the SHELL environment — not
+# from the demo's auto-loaded .env. Without exporting them here, compose
+# substitutes empty strings (e.g. GALILEO_API_KEY=""), leaving Galileo entirely
+# unconfigured INSIDE the container regardless of any per-turn flush. Galileo is
+# OPTIONAL: export whatever is present (empty is fine) and never hard-fail on it;
+# only SPLUNK_* stays required (handled above). Secret VALUES are never printed.
+CONCIERGE_ENV_VARS=(
+  GALILEO_API_KEY
+  GALILEO_PROJECT
+  GALILEO_LOG_STREAM
+  GALILEO_CONSOLE_URL
+  GALILEO_OTEL_EXPORT
+  MODEL_PROVIDER
+  MODEL_TEMPERATURE
+  OLLAMA_MODEL
+  OPENAI_API_KEY
+  OPENAI_MODEL
+  OTEL_SERVICE_NAME
+  DEPLOYMENT_ENVIRONMENT
+  WEB_ALLOWED_ORIGIN
+  CONCIERGE_API_URL
+  CONCIERGE_WEB_PORT
+)
+for _cw_var in "${CONCIERGE_ENV_VARS[@]}"; do
+  printf -v "${_cw_var}" '%s' "$(read_env_var "${_cw_var}")"
+  export "${_cw_var}"
+done
+if [[ -z "${GALILEO_API_KEY}" ]]; then
+  echo "stage-up: WARNING — GALILEO_API_KEY is empty in ${ENV_FILE}; concierge-web will run WITHOUT Galileo export (Splunk unaffected)." >&2
+fi
+
 # Pin the demo IMAGES to the same version as the vendored SOURCE (single source
 # of truth: stage/demo.ref). The demo ships DEMO_VERSION=latest, which pulls
 # images newer than our pinned clone and breaks the frontend-proxy (its envoy

@@ -1,17 +1,21 @@
 # Web Interface Plan — Control Plane UI + Storefront Concierge
 
-> Status: **Decisions signed off (2026-06-18); pre-implementation.** This document analyses the
-> implications of, and sequences the work for, augmenting the project's two CLIs with web
-> experiences. **No application code or config has been written or changed** as part of this
-> plan. Source of truth for *what the demo is* remains [`docs/demo-design.md`](demo-design.md);
-> the build sequencing remains [`docs/implementation-plan.md`](implementation-plan.md). The user
-> signed off the open decisions on **2026-06-18** (W1–W7 — see
-> [§14 Resolved decisions](#14-resolved-decisions)); the headline outcomes are a **standalone
-> "Astronomy Concierge" chat app first**, a **containerized-only** agent service, and **two
-> separately-sequenced web slices** (concierge after Phase 2, control-plane UI after Phase 3)
-> rather than one monolithic late phase. This doc is a **proposed amendment** to the build
-> sequencing — see [§9 Relationship to the implementation plan](#9-relationship-to-the-implementation-plan)
-> — but `docs/implementation-plan.md` is **intentionally left unedited pending user confirmation**.
+> Status: **Phases 7.0–7.4 implemented (static/integration-verified, 2026-06-19); Phase 7.5 live
+> clean-room sign-off PENDING.** This document analyses the implications of, and sequences the work
+> for, augmenting the project's two CLIs with web experiences. The web layers have now been built by
+> two parallel coding subagents as thin wrappers over the unchanged `agent/` and `control_plane/`
+> cores. Source of truth for *what the demo is* remains [`docs/demo-design.md`](demo-design.md); the
+> build sequencing is now reflected in [`docs/implementation-plan.md`](implementation-plan.md)
+> (Phase 7 added — the user confirmed and directed the Phase 7 build). The open decisions were
+> signed off on **2026-06-18** (W1–W8 — see [§14 Resolved decisions](#14-resolved-decisions)); the
+> headline outcomes are a **standalone "Astronomy Concierge" chat app first**, a
+> **containerized-only** agent service, and **two separately-sequenced web slices** (concierge after
+> Phase 2, control-plane UI after Phase 3) rather than one monolithic late phase. The optional Envoy
+> `<script>` storefront injection (W1) remains **out of scope** as a later, optional fidelity
+> enhancement. **What's verified so far is static/integration only** (deps install; both apps boot;
+> loopback guard accepts loopback / rejects `0.0.0.0`; registry discovers all 8 scenarios with no
+> core edits; compose override merges; frontend `dist` builds); the **live clean-room proof**
+> (Phase 7.5) is not yet done — see [§10](#10-phased-task-breakdown-proposed-phase-7).
 
 ## How to read this
 
@@ -326,13 +330,16 @@ when adopted, it would amend:
 > Phase 3**. Phase 7.5 (reproducibility/docs/verification) closes out each slice as it ships. The
 > "Phase 7" label is retained only as a grouping; the web UIs are **first-class deliverables**.
 
-### Phase 7.0 — Decisions & scaffolding seam (no app code)
+### Phase 7.0 — Decisions & scaffolding seam (no app code) — ✅ implemented (static-verified)
 **Tasks:** lock the open decisions (§11); choose web stack; reserve ports + env keys in
 `.env.example`; decide host-vs-container default; pick the injection path + fallback.
 **Exit criteria:** decisions recorded in this doc's Decisions table + the journal; `.env.example`
 lists the new keys; no behaviour change yet.
+**Status (2026-06-19):** ✅ done — decisions W1–W8 recorded; `.env.example` carries
+`CONCIERGE_WEB_PORT=8090`, `CONTROL_PLANE_WEB_PORT=8099`, `WEB_ALLOWED_ORIGIN`, `CONCIERGE_API_URL`,
+and the commented containerized `OTEL_EXPORTER_OTLP_ENDPOINT`; web deps added to `pyproject.toml`.
 
-### Phase 7.1 — Concierge service (HTTP wrapper over `agent/`)
+### Phase 7.1 — Concierge service (HTTP wrapper over `agent/`) — ✅ implemented (static/integration-verified)
 **Tasks:** FastAPI app exposing `POST /chat` + `GET /chat/stream` (SSE); session manager mapping
 chat → `session_id`; `setup_telemetry()` once at boot; per-session graph build via `overlay.py`;
 set `gen_ai.conversation.id`; graceful flush on shutdown. **Spike first:** Galileo multi-session
@@ -341,36 +348,73 @@ concurrency (§5.2).
 in Galileo** AND **`gen_ai.*` spans + GenAI histograms in Splunk** (parity with the CLI baseline,
 design Vignette 0); two concurrent sessions do **not** cross-contaminate traces; `MODEL_PROVIDER`
 swap still needs no code change.
+**Status (2026-06-19):** ✅ built — `web/concierge/app.py` (module-level `app`) + `service.py`
+expose `POST /chat`, `GET /chat/stream` (SSE tokens), `/healthz`, optional localhost
+`POST /admin/reload`; `setup_telemetry()` once at boot; per-session graph build via `overlay.py`;
+sets `gen_ai.conversation.id`; `telemetry.py` reused verbatim. **Concurrency-spike finding +
+resolution:** in **callback mode** a shared `GalileoLogger` + `start_session(...)` mutate
+process-global state, so concurrent sessions could cross-contaminate Galileo traces — **resolved**
+by serializing graph execution behind a global async lock **only** when `galileo_mode ==
+"callback"` (the `GALILEO_OTEL_EXPORT=1` path stays fully concurrent). Boot verified
+(`/healthz`=200). ⏳ **Pending Phase 7.5:** live multi-turn telemetry parity and concurrent-session
+Galileo isolation in a running stage.
 
-### Phase 7.2 — Concierge web widget + embedding
+### Phase 7.2 — Concierge web widget + embedding — ✅ implemented (static-verified; live pending)
 **Tasks:** build the tracked widget app; serve it from a new tracked compose-override container;
 embed per the chosen path (proxy route/port; optional Envoy `<script>` injection with fallback);
 wire CORS to the storefront origin.
 **Exit criteria:** a shopper can chat from the storefront; the widget is delivered with **zero
 edits to the vendored clone**; **clean-room rebuild** (delete clone + `down`, re-run setup/up)
 reproduces the widget and telemetry.
+**Status (2026-06-19):** ✅ built as a **standalone "Astronomy Concierge" React/Vite app**
+(`web/concierge/frontend/**`, lockfile committed) served by a new tracked `concierge-web` container
+appended to `stage/splunk-otel/docker-compose.override.yml` (existing collector config preserved);
+containerized only (W2), Ollama stays native via `host.docker.internal:11434`. The optional Envoy
+`<script>` injection into the storefront remains **out of scope** (later, optional enhancement, W1).
+Frontend `dist` builds and the compose override merges with `concierge-web`. ⏳ **Pending Phase
+7.5:** live in-browser chat against a running stage and the clean-room rebuild proof.
 
-### Phase 7.3 — Trigger hot-reload semantics
+### Phase 7.3 — Trigger hot-reload semantics — ✅ implemented (static-verified; live pending)
 **Tasks:** implement per-session overlay read (§6); invalidate `rag.py`'s `lru_cache` on
 session/reload; add localhost-only `POST /admin/reload` (optional).
 **Exit criteria:** `control_plane play <id>` (or web equivalent) then a **new** chat shows the
 trigger's effect; `reset` then a new chat is baseline — verified for all three agent-side triggers;
 `feature_flag` still hot-reloads via flagd; the control plane still only **writes** overlays (seam
 intact).
+**Status (2026-06-19):** ✅ built — per-session graph build via `overlay.py` plus an optional
+localhost `POST /admin/reload`; `agent/rag.py` gained `clear_corpus_cache()` to invalidate the
+`lru_cache` on per-session/reload (the one contained core touch the service implies). ⏳ **Pending
+Phase 7.5:** live proof that an applied trigger takes effect on a fresh session and resets cleanly.
 
-### Phase 7.4 — Control-plane web UI
+### Phase 7.4 — Control-plane web UI — ✅ implemented (static/integration-verified)
 **Tasks:** FastAPI layer over `control_plane/` (REST for list/play/reset/playlist; SSE for live
 play/verify output); lightweight frontend; **bind to `127.0.0.1`**; light CORS/CSRF/headers.
 **Exit criteria:** the SE can run the full `list→play→verify→reset` loop and a playlist from the
 browser with live streamed output; dropping a new stub scenario folder appears in the web UI
 **without code edits** (seam proof, design §7.2); service refuses non-loopback binds.
+**Status (2026-06-19):** ✅ built — `web/control_plane/app.py` (`create_app()` factory) +
+`__main__.py` + templates/static; REST `list/play/reset/playlist` + `verify`, SSE
+`GET /api/play/stream` and `GET /api/verify/stream` with a live log pane, thin over
+`registry.discover()` / `apply_trigger` / `reset_trigger` / `run_verification` (`control_plane/`
+internals unchanged — drop-in seam intact). Security: **loopback-only bind enforced**
+(`_require_loopback_bind()` rejects `0.0.0.0`/non-loopback before Uvicorn starts), CSRF
+(SameSite=Strict cookie + header token for POST + query token for acting SSE GETs), CSP + security
+headers, secret redaction for `GALILEO_*`/`SPLUNK_*`/`OPENAI_*`; launcher
+`scripts/control-plane-web.sh`. Verified: `/api/list`=200, loopback guard accepts loopback /
+rejects `0.0.0.0`, registry discovers all 8 scenarios with no core edits.
 
-### Phase 7.5 — Reproducibility, docs & verification
+### Phase 7.5 — Reproducibility, docs & verification — ⏳ PENDING (live clean-room sign-off)
 **Tasks:** `scripts/` launchers (self-bootstrapping); `README.md` / `scripts/README.md` zero-to-
 running updates; `CHANGELOG.md` entry (at implementation time); SE runbook web flows.
 **Exit criteria:** clean-room: fresh clone + `.env` → documented scripts → stage + both web apps
 up, widget visible, control-plane loop runnable, telemetry in **both** backends; CLIs still work as
 fallbacks.
+**Status (2026-06-19):** ⏳ **not yet done.** Partial scaffolding exists (`scripts/concierge-serve.sh`
+and `scripts/control-plane-web.sh` launchers; `web/README.md`), but the live clean-room proof —
+stage up + Ollama + `concierge-web` healthy in a browser, multi-turn chat, concurrent-session
+Galileo isolation, trigger hot-reload via a fresh session, and telemetry parity (`gen_ai.*` spans +
+GenAI histograms) in Splunk AI Agent Monitoring and Galileo — remains outstanding. The full README
+Installation/Example-usage backfill is gated on this proof.
 
 ---
 
@@ -385,6 +429,7 @@ fallbacks.
 | W5 | Keep the CLIs? | **Yes — keep both CLIs as supported thin clients/fallbacks over the same cores** | ✅ signed off 2026-06-18 |
 | W6 | Shared vs separate web backends | **Separate processes** (control plane stays loopback-only), shared stack/repo OK (as recommended) | ✅ signed off 2026-06-18 |
 | W7 | Sequencing | Web UIs are **first-class, not an afterthought**: **concierge web UI after Phase 2**; **control-plane web UI after Phase 3** (two separate slices, not one monolithic late phase) | ✅ signed off 2026-06-18 |
+| W8 | Streaming transport | **SSE** for the live play/verify and chat token streams (websockets only if bidirectional control is later needed); covered by the W4 web-stack sign-off | ✅ signed off 2026-06-18 |
 
 ---
 

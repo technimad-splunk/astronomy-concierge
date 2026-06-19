@@ -94,6 +94,11 @@ def _load_corpus() -> tuple[list[Chunk], Counter]:
     return chunks, doc_freq
 
 
+def clear_corpus_cache() -> None:
+    """Invalidate the memoized corpus so overlays are re-read on next search."""
+    _load_corpus.cache_clear()
+
+
 def search(query: str, k: int = 3) -> list[Chunk]:
     """Return the top-``k`` chunks most relevant to ``query`` (TF-IDF cosine-ish)."""
     chunks, doc_freq = _load_corpus()

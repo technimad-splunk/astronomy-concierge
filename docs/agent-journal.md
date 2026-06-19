@@ -22,6 +22,23 @@ Entries are append-only. Never delete or rewrite past entries.
 
 ---
 
+## 2026-06-19 — Phase 7: web interfaces (concierge chat + control-plane UI)
+
+**What:** Two parallel coding subagents implemented Phase 7 — a shopper-facing **Astronomy Concierge** chat app and a localhost-only **control-plane web UI** — as thin web layers over the unchanged `agent/` and `control_plane/` cores. This entry consolidates the cross-cutting docs (the build deliberately touched no docs). No git commit was made.
+
+**Why:** The web UIs are first-class deliverables (W7) that wrap the mature agent and harness without disturbing the single-instrument → dual-fan-out telemetry keystone or the drop-in scenario seam. Reusing the cores verbatim (CLIs preserved as fallbacks, W5) keeps `telemetry.py` and `control_plane/` internals unchanged, so `gen_ai.*` spans + GenAI histograms (Splunk AI Agent Monitoring) and Galileo Sessions→Traces→Spans are preserved by construction.
+
+**Decisions / trade-offs:**
+- Followed the signed-off web-plan decisions W1–W8: **standalone** concierge app first (Envoy `<script>` storefront injection stays optional/out-of-scope, W1); **containerized only** with native Ollama via `host.docker.internal:11434` (W2); per-session overlay read + optional localhost `POST /admin/reload` + `rag` cache invalidation (W3); **FastAPI + SSE** stack (W4); both CLIs kept as fallbacks (W5); **separate** loopback-bound control-plane process (W6); two separately-sequenced slices (W7); SSE transport (W8).
+- **Galileo concurrency-spike finding (Phase 7.1):** in callback mode `setup_telemetry()` creates one shared `GalileoLogger` and `start_session(...)` mutates process-global state, so concurrent web sessions can cross-contaminate Galileo traces. **Resolution:** serialize graph execution behind a global async lock **only** when `galileo_mode == "callback"`; the OTLP-export mode (`GALILEO_OTEL_EXPORT=1`) stays fully concurrent.
+- The only core touch was the contained, pre-flagged `agent/rag.py` `clear_corpus_cache()` (invalidate `lru_cache` on per-session/reload) — everything else lives in the new `web/` tree and the tracked compose override.
+
+**File inventory (summarized):** **Concierge (7.1–7.3):** `web/concierge/app.py` (module-level `app`) + `service.py` (`POST /chat`, `GET /chat/stream` SSE, `/healthz`, optional localhost `POST /admin/reload`); standalone React/Vite frontend `web/concierge/frontend/**` (lockfile committed) served by a new tracked `concierge-web` container appended to `stage/splunk-otel/docker-compose.override.yml`; `web/concierge/Dockerfile`/`README.md`. **Control plane (7.4):** `web/control_plane/app.py` (`create_app()`), `__main__.py`, templates/static; REST `list/play/reset/playlist`+`verify`, SSE `/api/play/stream` & `/api/verify/stream`; loopback-only bind guard (`_require_loopback_bind()`), CSRF (SameSite=Strict cookie + header/query tokens), CSP + security headers, secret redaction. **Shared:** `.env.example` (+`CONCIERGE_WEB_PORT=8090`, `CONTROL_PLANE_WEB_PORT=8099`, `WEB_ALLOWED_ORIGIN`, `CONCIERGE_API_URL`, commented containerized `OTEL_EXPORTER_OTLP_ENDPOINT`); `pyproject.toml` (+`fastapi`, `uvicorn[standard]`, `sse-starlette`, `jinja2`, `python-multipart`); `web/README.md`; `scripts/concierge-serve.sh` and `scripts/control-plane-web.sh`.
+
+**Effect on codebase / UX:** SEs and shoppers gain browser entry points (`scripts/concierge-serve.sh` → concierge on `:8090`; `scripts/control-plane-web.sh` → loopback control-plane UI on `127.0.0.1:8099`) while the CLIs keep working unchanged. **Verification split — done (static/integration, by the parent):** deps install; both apps boot (concierge `/healthz`=200, control-plane `/api/list`=200); loopback guard accepts loopback / rejects `0.0.0.0`; registry discovers all 8 scenarios with no core edits; compose override merges with `concierge-web`; frontend `dist` builds. **Pending (Phase 7.5 live clean-room sign-off):** stage up + Ollama + `concierge-web` healthy in a browser; multi-turn chat; concurrent-session Galileo isolation; trigger hot-reload via a fresh session; telemetry parity in Splunk AI Agent Monitoring and Galileo. The full README Installation/Example-usage backfill is gated on that clean-room proof.
+
+---
+
 ## 2026-06-18 — V3 Firewall: fix Galileo verifier for PII (entity-list) scorers
 
 **What:** Fixed the Galileo verifier so V3 "Firewall" `pii_exposed` verifies (it was reporting "none present" despite `input_pii` being enabled and firing). No prompt/vignette rework was needed.
@@ -556,3 +573,49 @@ entry — there is no user-facing change yet. No application code or config touc
 - **Trigger set preserved:** Still exactly 4 types (feature_flag, rag_corpus, tool_fault, prompt_overlay). No 5th type added.
 
 **Effect on codebase / UX:** `control_plane/verification/galileo_verifier.py` (added `pii_exposed` signal, narrowed `prompt_injection_detected`, updated docstring table+note). `scenarios/firewall/scenario.yaml` (signal→`pii_exposed`, header comment reframed). `scenarios/firewall/captions/firewall.md` (full rewrite for PII-detection narrative). `agent/store_client.py` (`place_order` cart pre-check). `agent/tools.py` (`add_to_cart` empty-cart warning, `checkout` docstring). `scenarios/compounding-error/scenario.yaml` (drive_prompt numbered steps). `scenarios/compounding-error/captions/compounding-error.md` (updated prompt+card). No commit made; plan checkboxes untouched.
+
+---
+
+## 2026-06-19 — Subagent model selection rule
+
+**What:** Added `.cursor/rules/subagent-models.mdc`, an `alwaysApply` governance rule that maps each subagent type to an explicit model slug. Updated `AGENTS.md` (principle #6) and `CHANGELOG.md`.
+
+**Why:** In Cursor's multitask mode, subagents inherit the parent model by default. This means `composer-2.5-fast` is never chosen for cheap read-only work, and `gpt-5.3-codex` (the dedicated coding model) is never chosen for code generation unless explicitly set. Without a standing rule, each session falls back to the expensive parent model for all subtasks.
+
+**Decisions / trade-offs:**
+- Mapped `explore` and `shell` subagents to `composer-2.5-fast` — these tasks are read-only or command-running and do not need reasoning depth.
+- Mapped code-writing `generalPurpose` subagents to `gpt-5.3-codex` — purpose-built, fast, and cheaper than large reasoning models for code.
+- Mapped planning/analysis `generalPurpose` to `composer-2.5` (balanced) rather than a thinking model; complex architectural decisions can escalate to `claude-4.6-sonnet-medium-thinking` if needed.
+- Kept `bugbot`/`security-review` on `claude-4.6-opus-max` — correctness and depth matter more than cost for security-sensitive work.
+- Added an explicit escalation note: if a subagent returns incomplete output, re-run one tier higher and document it here.
+
+**Effect on codebase / UX:** Governance-only change. No production code altered. Future agents will set `model` on every `Task` call, reducing cost and latency for the majority of subtasks.
+
+---
+
+## 2026-06-19 — Subagent worktree isolation rule + model-roster maintenance
+
+**What:** Added `.cursor/rules/subagent-worktrees.mdc` to enforce worktree isolation for parallel writing subagents. Updated `subagent-models.mdc` with a _Last verified_ date and a self-check maintenance instruction. Updated `AGENTS.md` (principle #7) and `CHANGELOG.md`.
+
+**Why:** Two related problems: (1) parallel `generalPurpose` subagents share the working tree — concurrent writes to overlapping files corrupt state and force the coordinator to manually track which files each subagent may touch. (2) The model roster in `subagent-models.mdc` is sourced from Cursor's system prompt, not the repo, so it silently drifts as Cursor releases new models. Neither problem was addressed by the existing rules.
+
+**Decisions / trade-offs:**
+- Chose `best-of-n-runner` as the worktree primitive rather than asking agents to manually run `git worktree add`. `best-of-n-runner` is the only subagent type Cursor provides that automatically provisions an isolated branch + working directory. Using it means zero setup overhead and a clean branch per task that the coordinator can review and merge.
+- The decision rule is kept simple and binary: single writer → `generalPurpose` is fine; multiple concurrent writers → `best-of-n-runner` for each. A more granular rule (e.g. based on file-overlap analysis) would be harder to follow and rarely worth it.
+- The model-roster maintenance instruction is placed inside `subagent-models.mdc` itself rather than a separate rule, so it fires in the same context where the roster is used. The instruction directs agents to cross-check against their own system prompt and update the file if it drifts — making the rule self-healing rather than requiring a human to notice staleness.
+
+**Effect on codebase / UX:** Governance-only. No production code altered. Parallel agent work will now run in isolated branches, eliminating write collisions. The model roster will be kept fresh by agents that read the rule.
+
+
+## 2026-06-19 — Galileo telemetry fix, concierge UI polish, and storefront cart sharing
+
+**What:** Three post-Phase-7 hardening threads on the concierge web app: (1) fixed containerized Galileo telemetry so interactions upload per turn; (2) restyled the chat frontend to match the Astronomy Shop and tightened input UX; (3) bridged the storefront's shopper id into the concierge so the cart is shared across the `:8080` storefront and `:8090` concierge tabs. No core agent logic changed beyond the additive `StoreClient.user_id` seam.
+
+**Why:** Live testing of the Phase-7 concierge surfaced gaps the static/integration checks could not: Galileo showed no traces from the container, the chat looked disjoint from the shop, and a cart built in the concierge was invisible in the storefront (and vice-versa) — undermining the co-shopping story.
+
+**Decisions / trade-offs:**
+- **Galileo root cause = env propagation, not flushing alone.** docker compose resolves `${GALILEO_*}` from the shell, not the demo's auto-loaded `.env`, so `concierge-web` booted unconfigured. Fixed in `scripts/stage-up.sh` by exporting the concierge/Galileo/model vars before `docker compose up`. Galileo is OPTIONAL, so an empty `GALILEO_API_KEY` warns rather than fails; only `SPLUNK_*` stays required. Added per-turn `flush_galileo()` in the long-lived web service (callback-mode buffers otherwise wait for process exit) plus a `load_dotenv()` host-path safety net. The Splunk OTLP path was never broken and was left untouched.
+- **Cart identity decoupled from telemetry identity.** Rather than reuse `session_id` for the cart, `StoreClient` gained a separate `user_id` (defaulting to `session_id` so CLI callers are unchanged). This lets the cart follow the shopper across origins while Galileo/OTel session grouping stays keyed on the conversation.
+- **Reversed the "Envoy injection out of scope" stance.** Cart sharing genuinely requires reading the storefront's per-origin `localStorage` shopper id, which only a script on the storefront's own origin can do. The id is mirrored into a port-agnostic `concierge_session` cookie on `localhost`. The injection is a tracked Envoy template override bind-mounted at runtime — the gitignored vendored clone is never edited in place. No secrets cross the bridge (the shopper id is a non-sensitive demo UUID the storefront already exposes client-side).
+
+**Effect on codebase / UX:** `scripts/stage-up.sh` (env export), `agent/telemetry.py` (`flush_galileo`), `agent/store_client.py` (`user_id`), `web/concierge/**` (per-turn flush, `cart_user_id` threading, `/images` mount, restyle, Enter-to-send), new tracked `stage/splunk-otel/frontend-proxy/envoy.tmpl.yaml` + `web/concierge/embed/concierge-bridge.js`, and the `frontend-proxy` block in `stage/splunk-otel/docker-compose.override.yml`. Verified live: Galileo uploads per interaction (Splunk unchanged) and the cart is shared across the storefront and concierge tabs.

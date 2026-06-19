@@ -110,12 +110,28 @@ class Telemetry:
             except Exception:  # pragma: no cover - non-fatal
                 pass
 
+    def flush_galileo(self, conclude: bool = False) -> None:
+        """Flush Galileo callback-mode buffers and optionally conclude session.
+
+        `conclude` is best-effort and only invoked when the underlying Galileo
+        logger exposes a compatible `conclude()` API.
+        """
+        if self._galileo_logger is None:
+            return
+        try:
+            self._galileo_logger.flush()
+        except Exception:  # pragma: no cover
+            pass
+        if conclude:
+            conclude_fn = getattr(self._galileo_logger, "conclude", None)
+            if callable(conclude_fn):
+                try:
+                    conclude_fn()
+                except Exception:  # pragma: no cover
+                    pass
+
     def flush(self) -> None:
-        if self._galileo_logger is not None:
-            try:
-                self._galileo_logger.flush()
-            except Exception:  # pragma: no cover
-                pass
+        self.flush_galileo()
         try:
             self._provider.force_flush()
         except Exception:  # pragma: no cover

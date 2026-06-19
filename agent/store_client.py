@@ -65,11 +65,24 @@ def _validate_currency(currency: str | None) -> str:
 class StoreClient:
     """Thin, validated wrapper over the frontend-proxy API.
 
-    A ``session_id`` ties cart reads/writes to a single shopper conversation.
+    Store identity is the **shopper id** (``user_id``): the cart service keys
+    carts by it and the storefront sends the same value as ``userId`` (cart
+    writes) / ``sessionId`` (cart reads + recommendations). Decoupling it from
+    the telemetry ``session_id`` lets the web layer share one shopper id with a
+    storefront browser tab (so carts are shared cross-origin) while Galileo/OTel
+    session grouping stays keyed on the conversation. ``user_id`` defaults to
+    ``session_id`` so CLI/single-process callers keep their previous behaviour.
     """
 
-    def __init__(self, session_id: str, base_url: str | None = None) -> None:
+    def __init__(
+        self,
+        session_id: str,
+        base_url: str | None = None,
+        user_id: str | None = None,
+    ) -> None:
         self.session_id = session_id
+        # The shopper identity used for all store calls (cart + recommendations).
+        self.user_id = (user_id or session_id)
         self.base_url = (base_url or _base_url()).rstrip("/")
         self._client = httpx.Client(base_url=self.base_url, timeout=_REQUEST_TIMEOUT_S)
 
@@ -115,7 +128,7 @@ class StoreClient:
         self, product_id: str | None = None, currency: str | None = None
     ) -> list[dict[str, Any]]:
         cur = _validate_currency(currency)
-        params: dict[str, Any] = {"sessionId": self.session_id, "currencyCode": cur}
+        params: dict[str, Any] = {"sessionId": self.user_id, "currencyCode": cur}
         if product_id:
             params["productIds"] = _validate_product_id(product_id)
         data = self._get("/api/recommendations", params)
@@ -128,7 +141,7 @@ class StoreClient:
     # --- cart --------------------------------------------------------------
     def get_cart(self, currency: str | None = None) -> dict[str, Any]:
         cur = _validate_currency(currency)
-        return self._get("/api/cart", {"sessionId": self.session_id, "currencyCode": cur})
+        return self._get("/api/cart", {"sessionId": self.user_id, "currencyCode": cur})
 
     def add_to_cart(self, product_id: str, quantity: int = 1) -> dict[str, Any]:
         pid = _validate_product_id(product_id)
@@ -140,7 +153,7 @@ class StoreClient:
             raise StoreError("Quantity must be between 1 and 100.")
         return self._post(
             "/api/cart",
-            {"userId": self.session_id, "item": {"productId": pid, "quantity": qty}},
+            {"userId": self.user_id, "item": {"productId": pid, "quantity": qty}},
         )
 
     def place_order(
@@ -168,7 +181,7 @@ class StoreClient:
                 "add_to_cart before calling checkout."
             )
         body = {
-            "userId": self.session_id,
+            "userId": self.user_id,
             "email": email,
             "userCurrency": cur,
             "address": {

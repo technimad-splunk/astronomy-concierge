@@ -1,8 +1,10 @@
 # Implementation Plan — Galileo × Splunk Observability Demo
 
-> Status: **Phased build plan.** Source of truth for *what to build* is
-> [`docs/demo-design.md`](demo-design.md); this document sequences *how and in what order* we build
-> it. No application code exists yet. This is a plan, not an implementation.
+> Status: **Phases 0–4 built; Phase 5 (Core-4 vignettes) committed; Phase 7 web UIs
+> implemented (static/integration-verified, live clean-room sign-off pending).** Source of
+> truth for *what to build* is [`docs/demo-design.md`](demo-design.md); this document sequences
+> *how and in what order* we build it. Phase 6 (delivery & polish) and the Phase 7.5 live
+> clean-room verification remain outstanding.
 
 ## How to read this
 
@@ -277,6 +279,60 @@ covers Luna-2 (V4) and real-time guardrails (V3).
 
 ---
 
+## Phase 7 — Web interfaces
+
+> Added after the user confirmed and directed the Phase-7 build. The **detailed spec, options,
+> tradeoffs, and signed-off decisions (W1–W8)** live in
+> [`docs/web-interface-plan.md`](web-interface-plan.md); this section is the implementation-plan
+> summary and exit gate.
+
+**Goal:** Augment the project's two CLIs with browser surfaces — a shopper-facing **Astronomy
+Concierge** chat app and a localhost-only **control-plane web UI** — built as **thin web layers over
+the unchanged `agent/` and `control_plane/` cores**, preserving the single-instrument →
+dual-fan-out telemetry keystone (design §3), the drop-in scenario seam (design §7), and the CLIs as
+supported fallbacks (W5).
+
+**Two slices (independently parallelizable):**
+
+- **Concierge slice (7.1–7.3):** a FastAPI service (`web/concierge/`) exposing `POST /chat`,
+  `GET /chat/stream` (SSE), `/healthz`, and an optional localhost `POST /admin/reload`;
+  `setup_telemetry()` once at boot; per-session graph build via `overlay.py`; `gen_ai.conversation.id`
+  set per conversation; a **standalone React/Vite frontend** served by a tracked `concierge-web`
+  container in the compose override (containerized only, Ollama native via `host.docker.internal`,
+  W2); per-session trigger hot-reload with `agent/rag.py` `clear_corpus_cache()` (W3). The optional
+  Envoy `<script>` storefront injection (W1) is **out of scope** as a later optional enhancement.
+  A Phase-7.1 spike found and resolved a **Galileo callback-mode concurrency hazard** (shared
+  `GalileoLogger` + process-global `start_session`) by serializing graph execution behind a global
+  async lock only in callback mode.
+- **Control-plane slice (7.4):** a FastAPI layer (`web/control_plane/`) — REST `list/play/reset/
+  playlist` + `verify`, SSE `play`/`verify` streams with a live log pane — thin over
+  `registry.discover()` / `apply_trigger` / `reset_trigger` / `run_verification` (internals
+  unchanged). **Loopback-only bind enforced**; CSRF + CSP + security headers + secret redaction.
+
+**Phase 7.5 — live clean-room sign-off (the exit gate):** stage up + Ollama + `concierge-web`
+healthy in a browser; multi-turn chat; concurrent-session Galileo isolation; trigger hot-reload via
+a fresh session; telemetry parity (`gen_ai.*` spans + GenAI histograms) in Splunk AI Agent
+Monitoring and Galileo; CLIs still work as fallbacks. The full README Installation/Example-usage
+backfill is gated on this proof.
+
+**Status (2026-06-19):** Phases **7.0–7.4 implemented and static/integration-verified** by two
+parallel coding subagents (deps install; both apps boot — concierge `/healthz`=200, control-plane
+`/api/list`=200; loopback guard accepts loopback / rejects `0.0.0.0`; registry discovers all 8
+scenarios with no core edits; compose override merges with `concierge-web`; frontend `dist`
+builds). **Phase 7.5 (live clean-room sign-off) is PENDING.**
+
+**Exit criteria / acceptance:** the Phase-7.5 clean-room proof above passes from a fresh clone +
+`.env` via the documented scripts (`scripts/concierge-serve.sh`, `scripts/control-plane-web.sh`),
+with both CLIs still functional.
+
+**Dependencies:** Phase 2 (concierge slice) and Phase 3 (control-plane slice).
+
+**Risks/limitations:** Galileo multi-session concurrency (mitigated, see above); reproducibility /
+telemetry regression (reuse `telemetry.py` verbatim; all new pieces tracked outside the clone);
+control-plane exposure (hard loopback bind). See [`docs/web-interface-plan.md`](web-interface-plan.md) §12.
+
+---
+
 ## Decisions (status)
 
 | # | Decision | Status | Outcome |
@@ -287,6 +343,7 @@ covers Luna-2 (V4) and real-time guardrails (V3).
 | D4 | **Eval-accuracy pillar** (§6, §9.4) | ✅ **DECIDED** | **Promoted to a real, live vignette** — "Trust the Judge" contrast (naive LLM-judge wrong ~1 in 3 vs. Luna-2 / consensus evaluators), unlocked by enterprise Luna-2. No longer talk-track-only |
 | D5 | **Galileo Pro** purchase | ⛔ **MOOT — removed** | Covered by enterprise access; no Pro purchase needed |
 | D6 | **Provider abstraction** (§8.2) | ✅ **DECIDED** | **LangChain chat-model interface** behind `MODEL_PROVIDER=ollama\|openai` (`ChatOllama` vs `ChatOpenAI`); follows from D1 |
+| W1–W8 | **Web interface decisions** (Phase 7) | ✅ **DECIDED** (signed off 2026-06-18) | Standalone "Astronomy Concierge" app first / Envoy injection optional-out-of-scope (W1); containerized-only, Ollama native (W2); per-session overlay read + `rag` cache invalidation (W3); FastAPI + lightweight frontend (W4); keep both CLIs as fallbacks (W5); separate loopback-bound control-plane process (W6); two separately-sequenced slices (W7); SSE streaming (W8). Full detail in [`docs/web-interface-plan.md`](web-interface-plan.md) §11/§14 |
 
 ---
 
@@ -296,7 +353,12 @@ covers Luna-2 (V4) and real-time guardrails (V3).
 
 ```
 Phase 0 → Phase 1 → Phase 2 → Phase 3 → Phase 4 (first end-to-end deliverable) → Phase 5 → Phase 6
+                         └─────────────────────┴──▶ Phase 7 (web interfaces: concierge slice after Phase 2, control-plane slice after Phase 3)
 ```
+
+Phase 7 is **not** on the Core-4 critical path: its concierge slice depends only on Phase 2 and its
+control-plane slice only on Phase 3, so it can proceed in parallel with Phases 4–6 (see
+[`docs/web-interface-plan.md`](web-interface-plan.md) §9).
 
 **Can proceed in parallel (off the critical path):**
 
