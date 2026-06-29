@@ -664,3 +664,17 @@ entry — there is no user-facing change yet. No application code or config touc
 - Added `GET /scenarios/{scenario_id}/script.html` to serve a standalone, copy-friendly HTML document derived from existing markdown rendering; switched the scenario "View Demo Script" action to `window.open(..., "_blank", "noopener")`. Kept the existing "Copy prompt" behavior unchanged.
 
 **Effect on codebase / UX:** Updated `control_plane/manifest.py`, `control_plane/registry.py`, `web/control_plane/app.py`, `web/control_plane/static/app.js`, `web/control_plane/templates/index.html`, `web/control_plane/static/styles.css`, and the four core scenario manifests. Both CLI and web now present the preferred scenario order; playlist selection is fully clickable; demo scripts open in a separate tab for easy selection/copy.
+
+## 2026-06-29 — Concierge chat UI polish
+
+**What:** Collapsed the session metadata panel behind a `<details>/<summary>` disclosure toggle and replaced the bare empty-state text with an immersive assistant welcome bubble.
+
+**Why:** The session ID, conversation ID, and cart shopper fields were rendered above the chat window at full prominence, cluttering the demo experience. The empty-state was a single unstyled sentence with no personality. Both issues made the interface feel unfinished for live demos.
+
+**Decisions / trade-offs:**
+- Used the native `<details>/<summary>` HTML element (no React state required) for the metadata collapse — minimal code, accessible by default, and no JS overhead.
+- Kept all three metadata fields intact behind the toggle so they remain available for demo debugging without code changes.
+- Reused the existing `.bubble-assistant` design for the welcome message so it looks like a real first turn from the concierge; added `.bubble-welcome` and `.bubble-welcome-hints` as small modifiers rather than duplicating styles.
+- Removed `.empty-state` entirely — no longer needed.
+
+**Effect on codebase / UX:** Changes confined to `web/concierge/frontend/src/App.jsx` and `web/concierge/frontend/src/styles.css`. On load, users now see a friendly concierge greeting bubble with three capability bullets; session details are accessible via a subtle "Session info ▸" link below the header.

@@ -203,7 +203,8 @@ function App() {
         </div>
       </header>
 
-      <section className="meta-panel" aria-label="session metadata">
+      <details className="meta-panel">
+        <summary className="meta-panel-toggle">Session info</summary>
         <span>
           <strong>Conversation:</strong> {conversationId || "new conversation"}
         </span>
@@ -213,13 +214,22 @@ function App() {
         <span>
           <strong>Cart shopper:</strong> {shopperId || "not set"}
         </span>
-      </section>
+      </details>
 
       <section ref={chatWindowRef} className="chat-window" aria-live="polite">
         {messages.length === 0 ? (
-          <p className="empty-state">
-            Ask for recommendations, policies, or cart actions.
-          </p>
+          <article className="bubble bubble-assistant bubble-welcome">
+            <p className="bubble-role">Concierge</p>
+            <p className="bubble-content">
+              Welcome to the Astronomy Shop! I&apos;m your AI concierge — here to help you explore our catalog and manage your order.
+            </p>
+            <ul className="bubble-welcome-hints">
+              <li><strong>Recommendations</strong> — find the right telescope, accessory, or gift</li>
+              <li><strong>Policies</strong> — shipping timelines, returns, and warranty</li>
+              <li><strong>Cart actions</strong> — add items, review your cart, or check out</li>
+            </ul>
+            <p className="bubble-content">What can I help you with today?</p>
+          </article>
         ) : (
           messages.map((msg) => (
             <article key={msg.id} className={`bubble bubble-${msg.role}`}>

@@ -9,6 +9,12 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **Intent:** Polish the concierge chat UI — collapse the technical session metadata panel and replace the bland empty-state text with an immersive welcome bubble.
+  **Rationale:** Session ID, conversation ID, and cart shopper are useful for demo debugging but were too visually prominent, competing with the chat itself. The plain empty-state text gave no personality or guidance. A collapsible `<details>/<summary>` hides the metadata by default with a single muted "Session info" toggle, and a styled assistant bubble greets the user on load using the existing bubble design language.
+  **Impact:** `web/concierge/frontend/src/App.jsx` — `<section class="meta-panel">` replaced with `<details>`, empty-state `<p>` replaced with a `.bubble-assistant` welcome article. `web/concierge/frontend/src/styles.css` — `.empty-state` removed; `.meta-panel-toggle`, `.meta-panel[open]`, `.bubble-welcome`, and `.bubble-welcome-hints` added. No backend or API changes.
+
 ### Added
 
 - **Intent:** Share one shopper cart across the Astronomy Shop storefront (`:8080`) and the Astronomy Concierge chat (`:8090`) so a cart built in either surface is visible in the other — turning the concierge into a true co-shopping assistant rather than an isolated sandbox.

@@ -63,18 +63,54 @@ body {
   font-size: 1.6rem;
   line-height: 1.1;
   font-weight: 800;
-  color: #29293e;
+  background: linear-gradient(to right, #FF6B6B, #FFA726);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
 }
 
 .meta-panel {
   width: min(1120px, 100%);
-  margin: 22px auto 0;
+  margin: 8px auto 0;
   padding: 0 20px;
+  color: #78788c;
+  font-size: 0.82rem;
+}
+
+.meta-panel[open] {
   display: grid;
   grid-template-columns: 1fr;
-  gap: 0.35rem;
-  color: #78788c;
-  font-size: 0.86rem;
+  gap: 0.3rem;
+}
+
+.meta-panel-toggle {
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: #a0a0b4;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  padding: 2px 0 4px;
+}
+
+.meta-panel-toggle::-webkit-details-marker {
+  display: none;
+}
+
+.meta-panel-toggle::before {
+  content: "▸";
+  display: inline-block;
+  transition: transform 0.15s ease;
+  font-size: 0.7rem;
+}
+
+.meta-panel[open] .meta-panel-toggle::before {
+  transform: rotate(90deg);
 }
 
 .meta-panel strong {
@@ -93,12 +129,6 @@ body {
   display: flex;
   flex-direction: column;
   gap: 12px;
-}
-
-.empty-state {
-  margin: auto 0;
-  color: #78788c;
-  font-size: 0.96rem;
 }
 
 .bubble {
@@ -122,6 +152,26 @@ body {
   align-self: flex-start;
   background: #f9f9f9;
   border: 1px solid #cacaca;
+}
+
+.bubble-welcome {
+  max-width: min(620px, 92%);
+  margin-top: 8px;
+}
+
+.bubble-welcome-hints {
+  margin: 10px 0 10px 0;
+  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: #29293e;
+  font-size: 0.96rem;
+  font-weight: 500;
+}
+
+.bubble-welcome-hints li {
+  line-height: 1.4;
 }
 
 .bubble-role {
