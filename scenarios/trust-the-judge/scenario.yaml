@@ -26,6 +26,7 @@
 id: trust-the-judge
 title: "Trust the Judge"
 message: eval-accuracy
+order: 4
 duration_min: 5
 trigger:
   type: prompt_overlay

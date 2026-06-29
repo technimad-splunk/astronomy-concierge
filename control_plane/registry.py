@@ -54,5 +54,5 @@ def discover(root: Path | None = None) -> Registry:
         except ManifestError as exc:
             errors.append(DiscoveryError(folder=manifest_path.parent, error=str(exc)))
 
-    scenarios.sort(key=lambda s: s.id)
+    scenarios.sort(key=lambda s: (s.order is None, s.order if s.order is not None else 0, s.title))
     return Registry(scenarios=scenarios, errors=errors)

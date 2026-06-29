@@ -22,6 +22,20 @@ Entries are append-only. Never delete or rewrite past entries.
 
 ---
 
+## 2026-06-29 — SE feedback round: control-plane UX, web-first README, stage-up refresh flags
+
+**What:** Acted on a round of cold-SE feedback. Delegated (gpt-5.3-codex) the SE control-plane UI changes: scenarios now sort by a declarative `order` field (runbook order, shared by CLI + web), the playlist composer is click-driven instead of typed ids, and talk tracks open in a standalone copy-friendly HTML tab. Directly added `--build`/`--pull` passthrough to `scripts/stage-up.sh`, and refined `README.md` (removed stale phase block, made `uv sync` optional, demoted the standalone concierge from the primary interface map now that it is embedded in the storefront overlay).
+
+**Why:** The concierge is now reached through the storefront overlay, so leading the interface map with the standalone `:8090` chat misrepresented the demo; the host launchers self-bootstrap their venv, so a mandatory `uv sync` step was inaccurate. A declarative `order` field keeps scenario sequencing in the drop-in manifests rather than hard-coded in the UI.
+
+**Decisions / trade-offs:**
+- Ordering encoded as an optional manifest `order` field, sorted centrally in `control_plane.registry` so CLI and web agree; unordered (stub) scenarios fall after.
+- Demo scripts open in a new browser tab (full HTML page) rather than an in-page modal, so the known-good prompt is selectable/copyable.
+- `stage-up` flags are additive and order-independent; default (no-flag) behavior is unchanged.
+- Followed the subagent-models + subagent-worktrees rules this round: single-writer tasks ran as `generalPurpose` on `gpt-5.3-codex`; parallel writers were avoided (would have used `best-of-n-runner` worktrees).
+
+**Effect on codebase / UX:** `control_plane/manifest.py` (+`order`), `control_plane/registry.py` (sort), `web/control_plane/**` (clickable playlist, `script.html` route, new-tab open), the four core `scenarios/*/scenario.yaml` (`order: 1..4`), `scripts/stage-up.sh` (`--build`/`--pull`), and `README.md` (web-first, install-optional). No agent or telemetry core changed.
+
 ## 2026-06-19 — Phase 7: web interfaces (concierge chat + control-plane UI)
 
 **What:** Two parallel coding subagents implemented Phase 7 — a shopper-facing **Astronomy Concierge** chat app and a localhost-only **control-plane web UI** — as thin web layers over the unchanged `agent/` and `control_plane/` cores. This entry consolidates the cross-cutting docs (the build deliberately touched no docs). No git commit was made.
@@ -634,3 +648,19 @@ entry — there is no user-facing change yet. No application code or config touc
 - Added the four new model slugs to the roster table with concise strength/cost descriptors; retained all existing rows and the same verification date.
 
 **Effect on codebase / UX:** Updated only `README.md`, `docs/runbook.md`, `CHANGELOG.md`, `docs/agent-journal.md`, and `.cursor/rules/subagent-models.mdc`. Operators now get an unambiguous web-first startup flow and consistent URLs across docs; model-selection governance now reflects current available subagent models.
+
+---
+
+## 2026-06-19 — Control-plane UX: ordered scenarios, clickable playlist, script new-tab view
+
+**What:** Implemented three SE-requested control-plane UX updates: declarative run-order support in scenario manifests, clickable scenario selection in the playlist composer, and standalone talk-track pages opened in a new tab. Verified imports, CLI listing, and ephemeral HTTP endpoints.
+
+**Why:** The SE runbook expects a specific play sequence and a low-friction operator flow. Alphabetical listing, typed playlist filters, and modal script rendering added avoidable operator friction during live demos.
+
+**Decisions / trade-offs:**
+- Added optional `order` to `scenario.yaml` manifests and sorted centrally in `control_plane.registry` by `(order is None, order, title)` so all consumers (`/api/list`, CLI `list`, and playlist defaults) agree without duplicating sort logic.
+- Added `order: 1..4` only to the four core vignettes; stub fixtures remain unordered and therefore naturally sort after ordered scenarios.
+- Changed playlist composition to accept explicit `ids` (plus optional `budget`) and updated the web UI to render toggleable scenario chips from `/api/list` non-fixture scenarios; this avoids free-text parsing and preserves operator-selected scope.
+- Added `GET /scenarios/{scenario_id}/script.html` to serve a standalone, copy-friendly HTML document derived from existing markdown rendering; switched the scenario "View Demo Script" action to `window.open(..., "_blank", "noopener")`. Kept the existing "Copy prompt" behavior unchanged.
+
+**Effect on codebase / UX:** Updated `control_plane/manifest.py`, `control_plane/registry.py`, `web/control_plane/app.py`, `web/control_plane/static/app.js`, `web/control_plane/templates/index.html`, `web/control_plane/static/styles.css`, and the four core scenario manifests. Both CLI and web now present the preferred scenario order; playlist selection is fully clickable; demo scripts open in a separate tab for easy selection/copy.

@@ -18,6 +18,7 @@
 id: compounding-error
 title: "The Compounding Error"
 message: error-compounding
+order: 2
 duration_min: 4
 
 # Drain the Locust load-generator before driving the agent so the payment

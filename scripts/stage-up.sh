@@ -9,7 +9,9 @@
 # tracked Splunk overrides (stage/splunk-otel/).
 #
 # Usage:
-#   scripts/stage-up.sh [full|minimal]      # default: full
+#   scripts/stage-up.sh [full|minimal] [--build] [--pull]   # default: full
+#     --build  force-rebuild locally-built images (e.g. concierge-web) during up
+#     --pull   re-fetch upstream demo images (pinned version) before up
 #
 # Transport is OTLP only — never the deprecated `sapm` exporter (demo-design
 # §3/§9.3). APM environment is set to "local-agent-galileo".
@@ -27,11 +29,22 @@ REF_FILE="${REPO_ROOT}/stage/demo.ref"
 DEMO_DIR="${REPO_ROOT}/stage/opentelemetry-demo"
 OVERRIDE_FILE="docker-compose.override.yml"   # materialized into the clone by stage-setup.sh
 
-MODE="${1:-full}"
+# Parse args: a mode (full|minimal) and optional --build / --pull, in any order.
+MODE="full"
+DO_BUILD=0
+DO_PULL=0
+for arg in "$@"; do
+  case "${arg}" in
+    full|minimal) MODE="${arg}" ;;
+    --build)      DO_BUILD=1 ;;
+    --pull)       DO_PULL=1 ;;
+    -h|--help)    echo "Usage: scripts/stage-up.sh [full|minimal] [--build] [--pull]"; exit 0 ;;
+    *) echo "FATAL: unknown argument '${arg}' (use: full | minimal [--build] [--pull])" >&2; exit 2 ;;
+  esac
+done
 case "${MODE}" in
   full)    COMPOSE_MAIN="docker-compose.yml" ;;
   minimal) COMPOSE_MAIN="docker-compose.minimal.yml" ;;
-  *) echo "FATAL: unknown mode '${MODE}' (use: full | minimal)" >&2; exit 2 ;;
 esac
 
 # --- Preconditions ----------------------------------------------------------
@@ -120,7 +133,21 @@ echo "stage-up: APM environment = local-agent-galileo  (transport: OTLP/HTTP)"
 
 # --- Up ---------------------------------------------------------------------
 cd "${DEMO_DIR}"
-docker compose -f "${COMPOSE_MAIN}" -f "${OVERRIDE_FILE}" up -d --remove-orphans
+
+# Optional: re-fetch upstream images for the pinned version before bringing up.
+# --ignore-pull-failures skips the locally-built concierge-web (no remote image).
+if [[ "${DO_PULL}" -eq 1 ]]; then
+  echo "stage-up: --pull set; re-fetching upstream images (DEMO_VERSION=${DEMO_VERSION}) ..."
+  docker compose -f "${COMPOSE_MAIN}" -f "${OVERRIDE_FILE}" pull --ignore-pull-failures
+fi
+
+# Optional: --build forces a rebuild of locally-built images (e.g. concierge-web).
+UP_ARGS=(-d --remove-orphans)
+if [[ "${DO_BUILD}" -eq 1 ]]; then
+  echo "stage-up: --build set; rebuilding locally-built images during up ..."
+  UP_ARGS+=(--build)
+fi
+docker compose -f "${COMPOSE_MAIN}" -f "${OVERRIDE_FILE}" up "${UP_ARGS[@]}"
 
 # --- Also launch the SE control-plane web UI (host process, NOT a container) --
 # The SE console needs HOST access (the running stage's flagd config, Galileo, the

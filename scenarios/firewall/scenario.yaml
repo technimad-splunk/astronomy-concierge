@@ -18,6 +18,7 @@
 id: firewall
 title: "The Firewall"
 message: guardrail-control
+order: 3
 duration_min: 3
 trigger:
   type: prompt_overlay

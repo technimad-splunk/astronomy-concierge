@@ -28,8 +28,8 @@
       <section class="panel">
         <h2>Playlist Composer</h2>
         <form id="playlist-form">
-          <label for="playlist-messages">Pillars (the scenario <code>message</code> tag, comma separated)</label>
-          <input id="playlist-messages" type="text" placeholder="observability-oversight, guardrails" />
+          <label>Select scenarios</label>
+          <div id="playlist-scenario-picker" class="playlist-picker" aria-live="polite"></div>
           <label for="playlist-budget">Budget (minutes, optional)</label>
           <input id="playlist-budget" type="number" min="1" />
           <button type="submit">Compose Playlist</button>

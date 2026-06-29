@@ -175,7 +175,7 @@
     var link = document.createElement("button");
     link.id = "concierge-nav-link";
     link.type = "button";
-    link.textContent = "AI Concierge";
+    link.textContent = "AI Astronomy Concierge";
     link.setAttribute("aria-haspopup", "dialog");
     link.setAttribute("aria-controls", "concierge-modal-overlay");
     link.addEventListener("click", onOpen);
@@ -227,7 +227,7 @@
       overlay.id = "concierge-modal-overlay";
       overlay.setAttribute("role", "dialog");
       overlay.setAttribute("aria-modal", "true");
-      overlay.setAttribute("aria-label", "Astronomy Concierge");
+      overlay.setAttribute("aria-label", "AI Astronomy Concierge");
 
       panel = document.createElement("div");
       panel.id = "concierge-modal-panel";
@@ -235,13 +235,13 @@
       closeButton = document.createElement("button");
       closeButton.id = "concierge-modal-close";
       closeButton.type = "button";
-      closeButton.setAttribute("aria-label", "Close AI Concierge");
+      closeButton.setAttribute("aria-label", "Close AI Astronomy Concierge");
       closeButton.textContent = "×";
       closeButton.addEventListener("click", closeModal);
 
       frame = document.createElement("iframe");
       frame.id = "concierge-widget-frame";
-      frame.title = "Astronomy Concierge";
+      frame.title = "AI Astronomy Concierge";
       frame.loading = "eager";
 
       panel.appendChild(closeButton);

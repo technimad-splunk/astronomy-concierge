@@ -105,6 +105,48 @@ button {
   color: #fecaca;
 }
 
+.playlist-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin: 0.45rem 0 0.35rem;
+}
+
+.playlist-chip {
+  width: auto;
+  min-width: 180px;
+  max-width: 100%;
+  margin-top: 0;
+  text-align: left;
+  padding: 0.48rem 0.62rem;
+  border: 1px solid #64748b;
+  background: #0b1220;
+}
+
+.playlist-chip.selected {
+  border-color: #22d3ee;
+  background: #0f2432;
+}
+
+.playlist-chip-title {
+  display: block;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.playlist-chip-meta {
+  display: block;
+  margin-top: 0.18rem;
+  font-size: 0.8rem;
+  color: #94a3b8;
+}
+
+.playlist-empty {
+  margin: 0.1rem 0;
+  color: #cbd5e1;
+  font-size: 0.9rem;
+}
+
 pre {
   background: #020617;
   border: 1px solid #334155;

@@ -198,7 +198,7 @@ function App() {
               src="/images/opentelemetry-demo-logo.png"
               alt="Astronomy Shop"
             />
-            <h1>Astronomy Concierge</h1>
+            <h1>AI Astronomy Concierge</h1>
           </div>
         </div>
       </header>

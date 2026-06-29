@@ -8,22 +8,14 @@ An SE-led, guided demo environment that showcases Galileo AI as the AI/agent int
 
 ## Installation
 
-> Phases 0–3 complete: the **stage** (forked Astronomy Shop + Splunk Collector
-> wiring) runs locally and exports to Splunk Observability over OTLP; the
-> **concierge agent** (`agent/`) is a LangGraph shopping concierge that answers
-> via RAG and acts via the store's APIs, instrumented once with OpenTelemetry
-> GenAI and fanned out to **both** Galileo and Splunk; and the **scenario harness
-> + SE control plane** (`control_plane/`) make vignettes drop-in folders with the
-> four fixed triggers and an `expected_signals` auto-verification hook. Authoring
-> the reference vignette content is Phase 4 (see
-> [`docs/implementation-plan.md`](docs/implementation-plan.md)).
-
 ### Prerequisites
 
 - **Docker Desktop** — to run the forked Astronomy Shop microservices stack
   (~6 GB RAM full / ~3 GB minimal, ~14 GB disk).
 - **Python 3.12+**.
-- A Python package manager: **`uv`** (recommended) or **`pip`**.
+- **Optional (expert/local-dev only):** a Python package manager
+  (**`uv`** recommended, or **`pip`**) if you want to run Python modules
+  directly instead of using the provided launch scripts.
 - **One model provider:**
   - **Ollama** installed natively (Apple-silicon laptop runtime — do *not* run it
     in Docker on macOS), **or**
@@ -38,8 +30,21 @@ git clone https://github.com/your-org/astronomy-concierge
 cd astronomy-concierge
 
 cp .env.example .env        # then fill in your tokens (see comments in the file)
+```
 
-# Install dependencies (resolves and locks exact versions on first run):
+No manual dependency install is required for the normal startup flow:
+
+- The concierge app started by `scripts/stage-up.sh` runs in the
+  `concierge-web` container, with dependencies installed in that image.
+- `scripts/check-connectivity.sh` is shell-only and works on a fresh clone
+  without a pre-created Python venv.
+- Host launchers (`scripts/control-plane-web.sh`, `scripts/control-plane.sh`,
+  and `scripts/concierge-serve.sh`) self-bootstrap `.venv` and install/update
+  Python dependencies on first run (and when `pyproject.toml` changes).
+
+Optional for direct local Python module execution (outside launchers):
+
+```sh
 uv sync                     # or: pip install -e .
 ```
 
@@ -85,9 +90,9 @@ Then open the primary web interfaces:
 
 | Surface | URL | Purpose |
 |---|---|---|
-| **Astronomy Concierge (chat)** | http://localhost:8090/ | Shopper-facing AI concierge |
+| **Astronomy Shop storefront (with embedded AI Concierge)** | http://localhost:8080/ | **Primary demo surface** — shop the store and open the AI Concierge from the **AI Concierge** link in the top nav (modal overlay). |
 | **SE Control-Plane UI (SE console)** | http://127.0.0.1:8099/ | Scenario control UI: list / play / reset / verify |
-| **Astronomy Shop storefront + embedded AI Concierge overlay** | http://localhost:8080/ | Storefront experience with embedded concierge |
+| Astronomy Concierge (standalone chat) | http://localhost:8090/ | The concierge served on its own. **You don't need to open this directly** — it's embedded in the storefront above. Handy for a focused chat view or debugging. |
 | flagd UI (optional) | http://localhost:8080/feature | Feature-flag inspection/toggles |
 | Jaeger (optional) | http://localhost:8080/jaeger/ui/ | Local trace viewer |
 | Splunk Observability (APM / AI Agent Monitoring) | your Observability Cloud realm | Operational backdrop — env `local-agent-galileo` |

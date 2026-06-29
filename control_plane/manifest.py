@@ -63,6 +63,7 @@ class Scenario:
     id: str
     title: str
     message: str
+    order: int | None
     duration_min: int
     trigger: Trigger
     expected_signals: ExpectedSignals
@@ -117,6 +118,12 @@ def parse_manifest(data: Any, *, scenario_dir: Path, manifest_path: Path) -> Sce
         raise ManifestError(f"{where}: 'id' must be non-empty.")
     title = _require(data, "title", where, types=(str,))
     message = _require(data, "message", where, types=(str,))
+    order = data.get("order")
+    if order is not None:
+        if isinstance(order, bool) or not isinstance(order, int):
+            raise ManifestError(f"{where}: 'order' must be an integer if present.")
+        if order <= 0:
+            raise ManifestError(f"{where}: 'order' must be a positive integer if present.")
     duration_min = _require(data, "duration_min", where, types=(int,))
     if duration_min <= 0:
         raise ManifestError(f"{where}: 'duration_min' must be a positive integer.")
@@ -152,6 +159,7 @@ def parse_manifest(data: Any, *, scenario_dir: Path, manifest_path: Path) -> Sce
         id=scenario_id,
         title=title,
         message=message,
+        order=order,
         duration_min=int(duration_min),
         trigger=Trigger(type=trig_type, ref=trig_ref, params=dict(params)),
         expected_signals=expected,

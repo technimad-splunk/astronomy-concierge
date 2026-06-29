@@ -2,6 +2,7 @@ const logPane = document.getElementById("live-log");
 const scenarioList = document.getElementById("scenario-list");
 const registryErrors = document.getElementById("registry-errors");
 const playlistOutput = document.getElementById("playlist-output");
+const playlistPicker = document.getElementById("playlist-scenario-picker");
 const fixtureToggle = document.getElementById("show-fixtures");
 const runbookButton = document.getElementById("runbook-btn");
 const modal = document.getElementById("doc-modal");
@@ -11,6 +12,8 @@ const modalContent = document.getElementById("doc-content");
 const modalCloseButton = document.getElementById("doc-close-btn");
 
 let activeStream = null;
+let visibleScenarios = [];
+const selectedPlaylistIds = new Set();
 
 function appendLog(line) {
   const ts = new Date().toISOString();
@@ -99,6 +102,50 @@ function openDocumentModal({ title, meta, html, emptyMessage }) {
   modal.classList.remove("hidden");
 }
 
+function renderPlaylistComposer() {
+  playlistPicker.innerHTML = "";
+  const selectable = visibleScenarios.filter((scenario) => !scenario.is_harness_fixture);
+  if (!selectable.length) {
+    const empty = document.createElement("p");
+    empty.className = "playlist-empty";
+    empty.textContent = "No scenarios available for playlist selection.";
+    playlistPicker.appendChild(empty);
+    return;
+  }
+
+  selectable.forEach((scenario) => {
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "playlist-chip";
+    if (selectedPlaylistIds.has(scenario.id)) {
+      chip.classList.add("selected");
+    }
+
+    const title = scenario.title ? `${scenario.id} — ${scenario.title}` : scenario.id;
+    const titleNode = document.createElement("span");
+    titleNode.className = "playlist-chip-title";
+    titleNode.textContent = title;
+    const metaNode = document.createElement("span");
+    metaNode.className = "playlist-chip-meta";
+    metaNode.textContent = `${scenario.message} · ${scenario.duration_min} min`;
+    chip.appendChild(titleNode);
+    chip.appendChild(metaNode);
+    chip.setAttribute("aria-pressed", selectedPlaylistIds.has(scenario.id) ? "true" : "false");
+    chip.addEventListener("click", () => {
+      if (selectedPlaylistIds.has(scenario.id)) {
+        selectedPlaylistIds.delete(scenario.id);
+        chip.classList.remove("selected");
+        chip.setAttribute("aria-pressed", "false");
+      } else {
+        selectedPlaylistIds.add(scenario.id);
+        chip.classList.add("selected");
+        chip.setAttribute("aria-pressed", "true");
+      }
+    });
+    playlistPicker.appendChild(chip);
+  });
+}
+
 function renderScenario(s) {
   const card = document.createElement("article");
   card.className = "scenario-card";
@@ -165,22 +212,11 @@ function renderScenario(s) {
   scriptButton.className = "script-btn";
   scriptButton.textContent = "View Demo Script";
   card.appendChild(scriptButton);
-  scriptButton.addEventListener("click", async () => {
-    scriptButton.disabled = true;
-    scriptButton.textContent = "Loading script...";
-    try {
-      const data = await apiGet(`/api/scenarios/${encodeURIComponent(s.id)}/script`);
-      openDocumentModal({
-        title: `${s.id} Talk Track`,
-        meta: `Source: ${data.script_path}`,
-        html: data.script_html,
-        emptyMessage: "Script is empty.",
-      });
-    } catch (err) {
-      appendLog(`ERROR loading script for ${s.id}: ${err.message}`);
-    } finally {
-      scriptButton.disabled = false;
-      scriptButton.textContent = "View Demo Script";
+  scriptButton.addEventListener("click", () => {
+    const scriptUrl = `/scenarios/${encodeURIComponent(s.id)}/script.html`;
+    const opened = window.open(scriptUrl, "_blank", "noopener");
+    if (!opened) {
+      appendLog(`ERROR opening script for ${s.id}: popup blocked by browser.`);
     }
   });
 
@@ -256,10 +292,19 @@ async function refreshScenarios() {
     const data = await res.json();
     scenarioList.innerHTML = "";
     registryErrors.innerHTML = "";
+    visibleScenarios = data.scenarios || [];
 
-    (data.scenarios || []).forEach((scenario) => {
+    const visibleIds = new Set(visibleScenarios.map((scenario) => scenario.id));
+    for (const selectedId of [...selectedPlaylistIds]) {
+      if (!visibleIds.has(selectedId)) {
+        selectedPlaylistIds.delete(selectedId);
+      }
+    }
+
+    visibleScenarios.forEach((scenario) => {
       scenarioList.appendChild(renderScenario(scenario));
     });
+    renderPlaylistComposer();
     if ((data.errors || []).length) {
       registryErrors.textContent = data.errors
         .map((e) => `${e.folder}: ${e.error}`)
@@ -311,15 +356,15 @@ document.getElementById("clear-log-btn").addEventListener("click", () => {
 
 document.getElementById("playlist-form").addEventListener("submit", async (event) => {
   event.preventDefault();
-  const messageRaw = document.getElementById("playlist-messages").value.trim();
   const budgetRaw = document.getElementById("playlist-budget").value.trim();
-  const message = messageRaw
-    ? messageRaw.split(",").map((item) => item.trim()).filter(Boolean)
-    : null;
   const budget = budgetRaw ? parseInt(budgetRaw, 10) : null;
+  if (!selectedPlaylistIds.size) {
+    appendLog("Select at least one scenario to compose a playlist.");
+    return;
+  }
 
   try {
-    const out = await apiPost("/api/playlist", { message, budget });
+    const out = await apiPost("/api/playlist", { ids: [...selectedPlaylistIds], budget });
     playlistOutput.textContent = JSON.stringify(out, null, 2);
     appendLog(`Composed playlist with ${out.count} scenario(s).`);
   } catch (err) {

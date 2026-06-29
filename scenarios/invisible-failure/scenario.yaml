@@ -21,6 +21,7 @@
 id: invisible-failure
 title: "The Invisible Failure"
 message: observability-oversight
+order: 1
 duration_min: 3
 trigger:
   type: feature_flag

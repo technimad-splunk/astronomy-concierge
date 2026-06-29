@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import html
 import json
 import os
 import re
@@ -69,6 +70,7 @@ class VerifyRequest(BaseModel):
 
 
 class PlaylistRequest(BaseModel):
+    ids: list[str] | None = None
     message: list[str] | None = None
     budget: int | None = Field(default=None, gt=0)
 
@@ -158,6 +160,7 @@ def _scenario_payload(s: Scenario) -> dict[str, Any]:
         "id": s.id,
         "title": s.title,
         "message": s.message,
+        "order": s.order,
         "is_harness_fixture": s.message == _HARNESS_STUB_MESSAGE,
         "duration_min": s.duration_min,
         "drive_prompt": drive_prompt,
@@ -212,6 +215,102 @@ def _scenario_script_payload(s: Scenario) -> dict[str, Any]:
     }
 
 
+def _scenario_script_document(s: Scenario, payload: dict[str, Any]) -> str:
+    safe_title = html.escape(s.title)
+    safe_id = html.escape(s.id)
+    safe_source = html.escape(payload["script_path"])
+    return f"""<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{safe_title} Demo Script</title>
+    <style>
+      :root {{
+        color-scheme: light;
+      }}
+      body {{
+        margin: 0;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        line-height: 1.65;
+        color: #0f172a;
+        background: #f8fafc;
+      }}
+      main {{
+        max-width: 920px;
+        margin: 0 auto;
+        padding: 2rem 1.25rem 2.5rem;
+      }}
+      header {{
+        margin-bottom: 1.2rem;
+        border-bottom: 1px solid #cbd5e1;
+        padding-bottom: 0.9rem;
+      }}
+      h1 {{
+        margin: 0 0 0.25rem;
+        font-size: 1.8rem;
+      }}
+      .meta {{
+        margin: 0;
+        color: #334155;
+      }}
+      h2, h3, h4 {{
+        line-height: 1.3;
+        margin: 1.25rem 0 0.6rem;
+      }}
+      p, li {{
+        color: #1e293b;
+      }}
+      pre {{
+        background: #0f172a;
+        color: #e2e8f0;
+        border: 1px solid #1e293b;
+        border-radius: 8px;
+        padding: 0.8rem;
+        overflow-x: auto;
+      }}
+      code {{
+        background: #e2e8f0;
+        border-radius: 4px;
+        padding: 0.08rem 0.28rem;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      }}
+      pre code {{
+        background: transparent;
+        padding: 0;
+      }}
+      table {{
+        width: 100%;
+        border-collapse: collapse;
+      }}
+      th, td {{
+        border: 1px solid #cbd5e1;
+        padding: 0.45rem 0.55rem;
+        text-align: left;
+        vertical-align: top;
+      }}
+      th {{
+        background: #e2e8f0;
+      }}
+      a {{
+        color: #1d4ed8;
+      }}
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>{safe_title}</h1>
+        <p class="meta">Scenario: {safe_id}</p>
+        <p class="meta">Source: {safe_source}</p>
+      </header>
+      {payload["script_html"]}
+    </main>
+  </body>
+</html>
+"""
+
+
 def _registry_payload(reg: Registry, *, include_fixtures: bool = False) -> dict[str, Any]:
     scenarios = [
         s
@@ -262,10 +361,12 @@ def _trigger_result_lines(result: TriggerResult) -> list[str]:
 
 def _compose_playlist(reg: Registry, req: PlaylistRequest) -> tuple[list[Scenario], int]:
     scenarios = list(reg.scenarios)
+    if req.ids:
+        wanted_ids = set(req.ids)
+        scenarios = [s for s in scenarios if s.id in wanted_ids]
     if req.message:
         wanted = set(req.message)
         scenarios = [s for s in scenarios if s.message in wanted]
-    scenarios.sort(key=lambda s: (s.message, s.duration_min, s.id))
 
     chosen: list[Scenario] = []
     total = 0
@@ -456,6 +557,16 @@ def create_app() -> FastAPI:
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return _scenario_script_payload(scenario)
+
+    @app.get("/scenarios/{scenario_id}/script.html", response_class=HTMLResponse)
+    async def scenario_script_document(scenario_id: str) -> HTMLResponse:
+        reg = discover()
+        try:
+            scenario = reg.get(scenario_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        payload = _scenario_script_payload(scenario)
+        return HTMLResponse(content=_scenario_script_document(scenario, payload))
 
     @app.get("/api/runbook")
     async def api_runbook() -> dict[str, Any]:
