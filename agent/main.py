@@ -43,6 +43,8 @@ def _print_telemetry_status(status) -> None:
     s = "ENABLED" if status.splunk_enabled else "OFF"
     m = "ENABLED" if status.metrics_enabled else "OFF"
     print(f"  instrumentation         = {status.instrumentation}")
+    t = "ENABLED" if status.translator_enabled else "OFF"
+    print(f"  genai translator [{t}]: {status.translator_detail}")
     print(f"  Galileo  [{g}] ({status.galileo_mode}): {status.galileo_detail}")
     print(f"  Splunk   [{s}]: {status.splunk_detail} ({status.splunk_endpoint})")
     print(f"  Splunk metrics [{m}]: {status.metrics_detail}")

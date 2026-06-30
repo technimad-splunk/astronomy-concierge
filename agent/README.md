@@ -43,8 +43,37 @@ is no longer the active OTel instrumentor. **Galileo is unaffected** — its
 
 The Splunk-documented GenAI env knobs (`OTEL_INSTRUMENTATION_GENAI_EMITTERS=span_metric`,
 `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=SPAN_ONLY`,
-`OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=delta`) are applied as
-defaults by `telemetry.py` and documented in `.env.example`.
+`OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=delta`, and
+`TRACELOOP_TRACE_CONTENT=true`) are applied as defaults by `telemetry.py` and
+documented in `.env.example`.
+
+### Closing the gaps: GenAI translator + collector model fix
+
+The bare Traceloop instrumentor leaves three things AI Agent Monitoring needs
+unsatisfied for this stack. Each is closed without leaving the
+"instrument-once" design:
+
+1. **Agents/workflows don't render.** Traceloop keeps the agent/workflow
+   structure in its own `traceloop.*` shape (`traceloop.span.kind`,
+   `traceloop.entity.*`, `traceloop.workflow.*`), which the AI Agent Monitoring
+   pages do not understand. Splunk's **Traceloop→GenAI translator**
+   (`splunk-otel-util-genai-translator-traceloop`) is a `SpanProcessor` that
+   promotes that shape into the OTel GenAI **entity model**
+   (`gen_ai.agent.*` / `gen_ai.workflow.*`, `invoke_agent` / `create_agent`
+   operations). `telemetry.py` registers it FIRST (before the export
+   `BatchSpanProcessor`) so its in-place attribute mutation is exported. Toggle
+   with `SPLUNK_GENAI_TRANSLATOR` (default on).
+2. **"No parsable message event found".** LLM spans carry no message content
+   unless `TRACELOOP_TRACE_CONTENT=true`. With content on, the same translator
+   reconstructs `gen_ai.input.messages` / `gen_ai.output.messages` in the schema
+   the conversation view parses (roles + `parts`, including `tool_call` parts).
+3. **`gen_ai.request.model = "unknown"`.** Traceloop can't read the model off
+   `ChatOllama`, so it stamps `"unknown"`; the real name lives in
+   `traceloop.association.properties.ls_model_name` (e.g. `llama3.1:8b`). The
+   translator does NOT map it, so the LOCAL Splunk collector promotes it via an
+   OTTL `transform/genai_model` (see `stage/splunk-otel/otelcol-config-extras.yml`),
+   only when the model is missing/blank/`"unknown"` (never clobbering a real
+   model from e.g. `ChatOpenAI`).
 
 > **Console-side prerequisites (one-time, done by a Splunk admin):** enable the
 > **LLM Providers** data integration (`Data Management > Available integrations`)
@@ -61,7 +90,7 @@ defaults by `telemetry.py` and documented in `.env.example`.
 | `tools.py` | The agent's tools (per session): `search_knowledge_base` (RAG) plus store actions (`search_products`, `get_product_details`, `get_recommendations`, `add_to_cart`, `view_cart`, `list_currencies`). |
 | `rag.py` | Dependency-free, deterministic TF-IDF retriever over `knowledge/*.md` (capability (a)). |
 | `store_client.py` | Validated HTTP client for the Astronomy Shop frontend-proxy API at `:8080/api/...` (capability (b)). |
-| `telemetry.py` | The keystone: one OTel `TracerProvider` + `MeterProvider` + one Traceloop `LangchainInstrumentor` (emits `gen_ai.*` spans + GenAI histograms), fanned out to **Splunk** (OTLP/gRPC spans + metrics → local collector) and **Galileo** (`GalileoCallback`, or opt-in OTLP). |
+| `telemetry.py` | The keystone: one OTel `TracerProvider` + `MeterProvider` + one Traceloop `LangchainInstrumentor` (emits `gen_ai.*` spans + GenAI histograms) + the Splunk Traceloop→GenAI translator span processor (entity model + conversation reconstruction), fanned out to **Splunk** (OTLP/gRPC spans + metrics → local collector) and **Galileo** (`GalileoCallback`, or opt-in OTLP). |
 | `main.py` / `__main__.py` | Runnable entrypoint (`python -m agent`): one-shot `--prompt` or interactive chat; wraps each turn in a Galileo session and flushes both backends on exit. |
 | `knowledge/` | The curated RAG corpus: shipping & returns, warranty, buying guide, store FAQ. |
 

@@ -22,6 +22,23 @@ Entries are append-only. Never delete or rewrite past entries.
 
 ---
 
+## 2026-06-30 — Splunk AI Agent Monitoring: GenAI translator + collector model fix
+
+**What:** Fixed three Splunk AI Agent Monitoring gaps for the concierge: `gen_ai.request.model` showing `unknown`, agents/workflows not rendering, and "No parsable message event found" on conversation spans. Added Splunk's Traceloop→GenAI translator span processor in `agent/telemetry.py` (registered before the export `BatchSpanProcessor`, behind `SPLUNK_GENAI_TRANSLATOR`), defaulted `TRACELOOP_TRACE_CONTENT=true`, and added a collector OTTL `transform/genai_model` that promotes `traceloop.association.properties.ls_model_name` → `gen_ai.request/response.model` when blank/`unknown`.
+
+**Why:** The Traceloop instrumentor emits `gen_ai.*` on LLM spans but keeps the agent/workflow structure in `traceloop.*` shape (not rendered by AI Agent Monitoring), can't read `ChatOllama`'s model name, and emits no message content by default. A read-only spike (throwaway py3.13 venv, real instrumentor 0.62.1 + translator 0.1.8 + a LangGraph react agent against local Ollama, console exporter) proved the translator attaches to our hand-built `TracerProvider`, promotes the entity model, reconstructs `gen_ai.input/output.messages` when `TRACELOOP_TRACE_CONTENT=true`, and produces no duplicate spans — but leaves the model as `unknown`. So the conversation/entity fixes are app-side and the model fix is collector-side; the single instrument-once → fan-out design is preserved (no move to fully code-based instrumentation).
+
+**Decisions / trade-offs:**
+- Register the translator FIRST (manual `provider.add_span_processor`) for deterministic ordering ahead of export, rather than relying on the package's `.pth` import-time auto-enable hook. That hook still fires on `set_tracer_provider`; its per-provider dedup checks an attribute name this SDK version doesn't use, so we set the package's `_PROCESSOR_REGISTERED` flag to make it a no-op (verified: exactly 1 processor when on, 0 when `SPLUNK_GENAI_TRANSLATOR=0`). Using a private flag is fragile but is the only runtime-disable lever (the public env disable must be set before interpreter start, which the `.pth` beats).
+- Fix the model in the local collector via a SEPARATE `transform/genai_model` processor (not by editing the upstream `transform`, whose OTTL list would be replaced on merge), guarded to only fill missing/blank/`unknown` so a real `ChatOpenAI` model is never clobbered.
+- Blast radius of the `.pth`: only processes that call `agent.telemetry.setup_telemetry` (the agent and `web/concierge`) are affected; `web/control_plane` never sets a tracer provider, so its armed hook stays dormant.
+
+**Effect on codebase / UX:** New deps (`splunk-otel-util-genai`, `splunk-otel-util-genai-translator-traceloop`); `opentelemetry-instrumentation-langchain>=0.62.1`. `agent/telemetry.py` + `agent/main.py` (status line), collector extras, `.env`/`.env.example` updated. AI Agent Monitoring now renders the LangGraph agent/workflow, the model name (e.g. `llama3.1:8b`), and the parsable conversation. Galileo unchanged.
+
+---
+
+---
+
 ## 2026-06-29 — SE feedback round: control-plane UX, web-first README, stage-up refresh flags
 
 **What:** Acted on a round of cold-SE feedback. Delegated (gpt-5.3-codex) the SE control-plane UI changes: scenarios now sort by a declarative `order` field (runbook order, shared by CLI + web), the playlist composer is click-driven instead of typed ids, and talk tracks open in a standalone copy-friendly HTML tab. Directly added `--build`/`--pull` passthrough to `scripts/stage-up.sh`, and refined `README.md` (removed stale phase block, made `uv sync` optional, demoted the standalone concierge from the primary interface map now that it is embedded in the storefront overlay).

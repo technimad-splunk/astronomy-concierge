@@ -28,10 +28,21 @@ dependencies = [
     # Monitoring keys off. (The official OTel-contrib LangChain instrumentor only
     # emits gen_ai.* for ChatOpenAI/ChatBedrock, so it would leave the Ollama
     # default uninstrumented.)
-    "opentelemetry-instrumentation-langchain>=0.61",
+    "opentelemetry-instrumentation-langchain>=0.62.1",
     # GenAI semantic-convention attribute/metric definitions used by the Traceloop
     # instrumentor above (pinned for reproducible gen_ai.* attribute names).
     "opentelemetry-semantic-conventions-ai>=0.5.1",
+    # Splunk's OTel GenAI utility + Traceloop->GenAI translator. The translator is
+    # a SpanProcessor that promotes Traceloop's span shape (traceloop.entity.*,
+    # traceloop.workflow.*, span.kind) into the OTel GenAI ENTITY model
+    # (gen_ai.agent.*, gen_ai.workflow.*, invoke_agent/create_agent operations) AND
+    # reconstructs gen_ai.input.messages / gen_ai.output.messages from captured
+    # content — which is what lets Splunk AI Agent Monitoring render the agent and
+    # its conversation. Requires TRACELOOP_TRACE_CONTENT=true so the source content
+    # exists for reconstruction. (The model name is fixed collector-side; the
+    # translator does not map ls_model_name -> gen_ai.request.model.)
+    "splunk-otel-util-genai>=0.1.14",
+    "splunk-otel-util-genai-translator-traceloop>=0.1.8",
     # OpenInference is retained only for `using_session` (Galileo session
     # context); it is no longer the active OTel instrumentor.
     "openinference-instrumentation-langchain>=0.1.66",

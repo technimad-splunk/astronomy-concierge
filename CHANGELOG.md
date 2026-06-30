@@ -9,6 +9,12 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Intent:** Make Splunk AI Agent Monitoring actually render the concierge — fix `gen_ai.request.model` showing `unknown`, the agent/workflow not appearing on the AI agents pages, and the "No parsable message event found" error on AI conversation spans.
+  **Rationale:** The Traceloop `LangchainInstrumentor` emits `gen_ai.*` on LLM spans but (a) can't read the model off `ChatOllama` so it stamps `gen_ai.request.model`/`gen_ai.response.model` = `"unknown"` (the real name is in `traceloop.association.properties.ls_model_name`), (b) keeps the agent/workflow structure in its own `traceloop.*` shape that the AI Agent Monitoring pages don't interpret, and (c) by default puts no message content on LLM spans, so the conversation view has nothing parsable. A read-only spike against the real instrumentor + Splunk's Traceloop→GenAI translator confirmed the translator promotes the entity model and reconstructs the conversation when content capture is on, but does not fix the model name — so model is corrected collector-side. This keeps the existing single "instrument-once → fan-out" design (no switch to fully code-based instrumentation).
+  **Impact:** Added `splunk-otel-util-genai` + `splunk-otel-util-genai-translator-traceloop` deps and bumped `opentelemetry-instrumentation-langchain` to `>=0.62.1`. `agent/telemetry.py` now registers the translator `SpanProcessor` FIRST (before the export `BatchSpanProcessor`) so its in-place mutation is exported, behind `SPLUNK_GENAI_TRANSLATOR` (default on) and de-duplicated against the package's `.pth` auto-enable hook; it also defaults `TRACELOOP_TRACE_CONTENT=true` (the content-capture lever). The local Splunk collector gains an OTTL `transform/genai_model` (`stage/splunk-otel/otelcol-config-extras.yml`) that promotes `ls_model_name` → `gen_ai.request/response.model` only when missing/blank/`"unknown"`. Telemetry status now reports the translator; `.env`/`.env.example` document the two new knobs. Galileo is unaffected (its callback path is independent of OTel spans).
+
 ### Changed
 
 - **Intent:** Polish the concierge chat UI — collapse the technical session metadata panel and replace the bland empty-state text with an immersive welcome bubble.

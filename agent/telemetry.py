@@ -67,10 +67,18 @@ _TRUE = {"1", "true", "True", "yes", "on"}
 #   span_metric -> emit BOTH spans and metrics
 #   SPAN_ONLY   -> capture message content on spans (not events)
 #   delta       -> metric temporality required by AI Agent Monitoring
+#
+# TRACELOOP_TRACE_CONTENT=true is the lever that makes the Traceloop LangChain
+# instrumentor put the actual prompt/completion content on LLM spans. Without it,
+# LLM spans carry no message content and Splunk AI Agent Monitoring reports
+# "No parsable message event found". With it on, the Traceloop->GenAI translator
+# (registered below) reconstructs gen_ai.input.messages / gen_ai.output.messages
+# in the schema the AI Agent Monitoring UI parses. setdefault keeps .env wins.
 _GENAI_ENV_DEFAULTS = {
     "OTEL_INSTRUMENTATION_GENAI_EMITTERS": "span_metric",
     "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "SPAN_ONLY",
     "OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE": "delta",
+    "TRACELOOP_TRACE_CONTENT": "true",
 }
 
 
@@ -87,6 +95,8 @@ class TelemetryStatus:
     splunk_endpoint: str
     splunk_detail: str
     instrumentation: str
+    translator_enabled: bool
+    translator_detail: str
     metrics_enabled: bool
     metrics_detail: str
 
@@ -175,6 +185,71 @@ def setup_telemetry() -> Telemetry:
         }
     )
     provider = TracerProvider(resource=resource)
+
+    # --- Splunk AI Agent Monitoring: Traceloop -> GenAI entity-model translator
+    # The Traceloop LangChain instrumentor emits gen_ai.* on LLM spans, but keeps
+    # the agent/workflow structure in its own traceloop.* shape (traceloop.span.kind,
+    # traceloop.entity.*, traceloop.workflow.*), which Splunk AI Agent Monitoring
+    # does not render. Splunk's Traceloop translator is a SpanProcessor that
+    # promotes that shape into the OTel GenAI ENTITY model
+    # (gen_ai.agent.*/gen_ai.workflow.*, invoke_agent/create_agent operations) and
+    # reconstructs gen_ai.input.messages / gen_ai.output.messages from the captured
+    # content. It MUTATES spans in place, so it MUST run before the export
+    # BatchSpanProcessor; we register it FIRST. (It does NOT map ls_model_name ->
+    # gen_ai.request.model, so the model name is corrected collector-side; see
+    # stage/splunk-otel/otelcol-config-extras.yml.) Disable with
+    # SPLUNK_GENAI_TRANSLATOR=0.
+    translator_enabled = False
+    translator_detail = "disabled (SPLUNK_GENAI_TRANSLATOR=0)"
+    translator_on = os.getenv("SPLUNK_GENAI_TRANSLATOR", "1").strip().lower() not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
+    if translator_on:
+        try:
+            import opentelemetry.util.genai.traceloop as _tl_translator
+            from opentelemetry.util.genai.processor.traceloop_span_processor import (
+                TraceloopSpanProcessor,
+            )
+
+            provider.add_span_processor(
+                TraceloopSpanProcessor(
+                    attribute_transformations=_tl_translator._DEFAULT_ATTR_TRANSFORMATIONS,
+                    name_transformations=_tl_translator._DEFAULT_NAME_TRANSFORMATIONS,
+                    mutate_original_span=True,
+                )
+            )
+            # We register the processor ourselves (first, before the exporter) for
+            # deterministic ordering. Importing the package above also armed its
+            # import-time auto-enable hook, which re-registers on the next
+            # set_tracer_provider() call; its per-provider dedup checks an attribute
+            # name this SDK version does not use, so without this it adds a DUPLICATE
+            # processor. Setting the module's global registered-flag makes that hook
+            # a no-op (it checks this flag first). Disable the whole feature with
+            # SPLUNK_GENAI_TRANSLATOR=0.
+            _tl_translator._PROCESSOR_REGISTERED = True
+            translator_enabled = True
+            translator_detail = (
+                "splunk traceloop->genai translator: entity model + message "
+                "reconstruction (span processor)"
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            translator_detail = f"FAILED to initialize: {exc}"
+    else:
+        # The package ships a .pth that imports its module at interpreter startup,
+        # arming a hook that auto-registers the translator on the next
+        # set_tracer_provider() call. That fires before our runtime code (and before
+        # .env is loaded), so the public env-var disable cannot win at runtime here.
+        # Neutralize the armed hook for this process by marking it already-registered
+        # so it becomes a no-op, leaving zero translator processors attached.
+        try:
+            import opentelemetry.util.genai.traceloop as _tl_translator
+
+            _tl_translator._PROCESSOR_REGISTERED = True
+        except Exception:  # pragma: no cover - defensive
+            pass
 
     galileo_logger = None
     callbacks: list = []
@@ -346,6 +421,8 @@ def setup_telemetry() -> Telemetry:
         splunk_endpoint=splunk_endpoint,
         splunk_detail=splunk_detail,
         instrumentation=instrumentation,
+        translator_enabled=translator_enabled,
+        translator_detail=translator_detail,
         metrics_enabled=metrics_enabled,
         metrics_detail=metrics_detail,
     )

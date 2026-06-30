@@ -51,6 +51,26 @@ exporters:
       X-SF-Token: "${env:SPLUNK_ACCESS_TOKEN}"
 
 processors:
+  # Fix the GenAI request/response model on LLM spans before they reach Splunk.
+  #
+  # The Traceloop LangChain instrumentor cannot read the model name off ChatOllama
+  # (and some other non-OpenAI chat models), so it stamps gen_ai.request.model and
+  # gen_ai.response.model = "unknown" — which makes Splunk AI Agent Monitoring show
+  # the LLM as model "unknown". The REAL model is carried in the Traceloop-specific
+  # attribute traceloop.association.properties.ls_model_name (e.g. "llama3.1:8b"),
+  # which the app-side Traceloop->GenAI translator leaves intact on the span. The
+  # translator deliberately does NOT map it to gen_ai.request.model, so we promote
+  # it here, only when the model is missing/blank/"unknown" (never clobbering a
+  # real model emitted by e.g. ChatOpenAI). This is a separate processor from the
+  # upstream `transform` so we don't replace the demo's OTTL statements.
+  transform/genai_model:
+    error_mode: ignore
+    trace_statements:
+      - context: span
+        statements:
+          - set(span.attributes["gen_ai.request.model"], span.attributes["traceloop.association.properties.ls_model_name"]) where span.attributes["traceloop.association.properties.ls_model_name"] != nil and (span.attributes["gen_ai.request.model"] == nil or span.attributes["gen_ai.request.model"] == "unknown" or span.attributes["gen_ai.request.model"] == "")
+          - set(span.attributes["gen_ai.response.model"], span.attributes["traceloop.association.properties.ls_model_name"]) where span.attributes["traceloop.association.properties.ls_model_name"] != nil and (span.attributes["gen_ai.response.model"] == nil or span.attributes["gen_ai.response.model"] == "unknown" or span.attributes["gen_ai.response.model"] == "")
+
   # Tag everything that flows to Splunk with a recognizable APM environment so
   # the store is easy to find: APM > Environment = "local-agent-galileo".
   resource/splunk:
@@ -62,7 +82,7 @@ processors:
 service:
   pipelines:
     traces:
-      processors: [resourcedetection, memory_limiter, transform, resource/splunk]
+      processors: [resourcedetection, memory_limiter, transform, transform/genai_model, resource/splunk]
       exporters: [otlp, spanmetrics, otlphttp/splunk]
     metrics:
       # `receivers` is intentionally omitted so the merge KEEPS the upstream list
