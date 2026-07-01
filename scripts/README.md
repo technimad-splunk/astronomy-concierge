@@ -18,15 +18,18 @@ incrementally as the project matures.
 - [`stage-up.sh`](stage-up.sh) — **Phase-1**. Runs `stage-setup.sh` (so it's
   self-bootstrapping), then brings up the vendored Astronomy Shop via
   docker-compose with the Collector exporting to Splunk Observability over
-  OTLP/HTTP. Usage: `scripts/stage-up.sh [full|minimal]` (default `full`). Reads
-  `SPLUNK_ACCESS_TOKEN` / `SPLUNK_REALM` from `.env`; never echoes them.
+  OTLP/HTTP. Usage: `scripts/stage-up.sh [full|minimal] [--build] [--pull]`
+  (default `full`). `--build` rebuilds only locally-built override services
+  (currently `concierge-web`), while `--pull` refreshes pullable upstream demo
+  images. Reads `SPLUNK_ACCESS_TOKEN` / `SPLUNK_REALM` from `.env`; never
+  echoes them.
 - [`stage-down.sh`](stage-down.sh) — **Phase-1**. Stops/removes the stage.
   Usage: `scripts/stage-down.sh [full|minimal] [--volumes]`.
 - [`agent-run.sh`](agent-run.sh) — **Phase-2**, self-bootstrapping. Creates/reuses
   the venv, installs deps, and runs the concierge (`python -m agent`).
 - [`control-plane.sh`](control-plane.sh) — **Phase-3**, self-bootstrapping. Runs
   the SE control plane / scenario harness (`python -m control_plane`):
-  `list / play / reset / verify / playlist`. Adding a scenario is a drop-in folder
+  `list / play / reset / verify`. Adding a scenario is a drop-in folder
   under `scenarios/` — this script never changes. Reads creds from `.env`; never
   echoes them.
 

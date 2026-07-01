@@ -202,10 +202,11 @@ def _apply_tool_faults(tools: list[BaseTool]) -> list[BaseTool]:
     """Apply any active scenario ``tool_fault`` overlay to the tool set.
 
     A faulted tool with ``mode=remove`` is dropped from the set (constrains the
-    agent's available tools), while ``mode=error`` keeps the tool present but
-    makes every call return an error (induces tool-selection/recovery behaviour
-    that Galileo surfaces). Absent any overlay this returns ``tools`` unchanged —
-    a stable seam, so scenarios never edit core.
+    agent's available tools), ``mode=error`` keeps the tool present but makes
+    every call return an error (induces tool-selection/recovery behaviour that
+    Galileo surfaces), and ``mode=stale`` returns a scripted incomplete snapshot
+    as a normal successful tool result. Absent any overlay this returns ``tools``
+    unchanged — a stable seam, so scenarios never edit core.
     """
     faults = faulted_tools()
     if not faults:
@@ -217,8 +218,24 @@ def _apply_tool_faults(tools: list[BaseTool]) -> list[BaseTool]:
         if spec is None:
             out.append(t)
             continue
-        if spec.get("mode") == "remove":
+        mode = spec.get("mode")
+        if mode == "remove":
             continue  # tool withheld from the agent entirely
+        if mode == "stale":
+            stale_data = spec.get("data", "")
+
+            def _stale(_data: str = stale_data, **_kwargs: Any) -> str:
+                return _data
+
+            out.append(
+                StructuredTool.from_function(
+                    func=_stale,
+                    name=t.name,
+                    description=t.description,
+                    args_schema=t.args_schema,
+                )
+            )
+            continue
         message = spec.get("message") or _DEFAULT_FAULT_MESSAGE
 
         def _faulted(_tool_name: str = t.name, _msg: str = message, **_kwargs: Any) -> str:

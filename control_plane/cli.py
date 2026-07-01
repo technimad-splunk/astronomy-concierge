@@ -1,19 +1,17 @@
-"""The SE control-plane CLI — ``list / play / reset / verify / playlist``.
+"""The SE control-plane CLI — ``list / play / reset / verify``.
 
 A stable seam (demo-design §7.2): adding scenarios never changes this file.
 Run via ``python -m control_plane <cmd>`` or ``scripts/control-plane.sh <cmd>``.
 
 - ``list``              — show every drop-in scenario the registry discovered.
-- ``play <id>``         — apply the scenario's trigger, then optionally drive the
-                          agent (``--prompt`` / ``trigger.params.drive_prompt``).
+- ``play <id>``         — apply the scenario's trigger. For agent-side triggers,
+                          the CLI prints guidance to drive via concierge web chat.
 - ``reset <id>``        — trigger-level reset (authoritative) + the per-scenario
                           ``reset.sh`` if present; restores baseline.
 - ``verify <id>``       — run the ``expected_signals`` auto-verification hook and
                           print a pass/fail report (Galileo real, live-queried;
                           Splunk reported as operator-attested with embedded
                           evidence — the ingest-only token can't query APM).
-- ``playlist``          — compose a run by ``message`` pillar within a time budget.
-
 No secrets are printed — only what state changed and which backends were used.
 """
 
@@ -120,6 +118,20 @@ def cmd_play(reg: Registry, args: argparse.Namespace) -> int:
     _print_trigger_result(result)
 
     prompt = args.prompt or scenario.trigger.params.get("drive_prompt")
+    if scenario.trigger.type in {"tool_fault", "prompt_overlay", "rag_corpus"}:
+        print(
+            "\nAgent-side trigger applied on the running concierge service. "
+            "Drive this scenario via the concierge web chat."
+        )
+        if prompt:
+            print(f"\nDrive prompt:\n  {prompt}")
+        else:
+            print(
+                "\nNo drive prompt is declared. Use the scenario caption talk track to "
+                "drive the conversation in the web chat."
+            )
+        return 0
+
     if args.no_drive or not prompt:
         if not prompt and not args.no_drive:
             print(
@@ -202,37 +214,6 @@ def cmd_verify(reg: Registry, args: argparse.Namespace) -> int:
     return 0 if report.overall_pass else 1
 
 
-# --- playlist ----------------------------------------------------------------
-def cmd_playlist(reg: Registry, args: argparse.Namespace) -> int:
-    scenarios = list(reg.scenarios)
-    if args.message:
-        wanted = set(args.message)
-        scenarios = [s for s in scenarios if s.message in wanted]
-    # Order by pillar then shortest-first, greedily fitting the time budget.
-    scenarios.sort(key=lambda s: (s.message, s.duration_min, s.id))
-    chosen: list[Scenario] = []
-    total = 0
-    for s in scenarios:
-        if args.budget is not None and total + s.duration_min > args.budget:
-            continue
-        chosen.append(s)
-        total += s.duration_min
-
-    if not chosen:
-        print("No scenarios match the playlist filters.")
-        return 0
-    title = "Playlist"
-    if args.message:
-        title += f" (pillars: {', '.join(args.message)})"
-    if args.budget is not None:
-        title += f" (budget: {args.budget} min)"
-    print(f"{title}\n")
-    for i, s in enumerate(chosen, 1):
-        print(f"  {i}. {s.id}  [{s.message}, {s.duration_min} min] — {s.title}")
-    print(f"\nTotal: {total} min across {len(chosen)} scenario(s).")
-    return 0
-
-
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="control_plane",
@@ -242,7 +223,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("list", help="list discovered scenarios")
 
-    p_play = sub.add_parser("play", help="apply a scenario's trigger (+ optionally drive the agent)")
+    p_play = sub.add_parser(
+        "play", help="apply a scenario trigger (agent-side triggers are web-driven)"
+    )
     p_play.add_argument("id")
     p_play.add_argument("--prompt", help="prompt to drive the agent with after applying the trigger")
     p_play.add_argument("--session-id", help="session id for the agent run")
@@ -255,10 +238,6 @@ def build_parser() -> argparse.ArgumentParser:
     p_verify.add_argument("id")
     p_verify.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT_S, help="poll timeout seconds")
     p_verify.add_argument("--interval", type=float, default=DEFAULT_INTERVAL_S, help="poll interval seconds")
-
-    p_play_list = sub.add_parser("playlist", help="compose a run by message pillar + time budget")
-    p_play_list.add_argument("--message", action="append", help="filter to this pillar (repeatable)")
-    p_play_list.add_argument("--budget", type=int, help="max total duration in minutes")
 
     return parser
 
@@ -274,7 +253,6 @@ def main(argv: list[str] | None = None) -> int:
         "play": cmd_play,
         "reset": cmd_reset,
         "verify": cmd_verify,
-        "playlist": cmd_playlist,
     }
     return dispatch[args.command](reg, args)
 

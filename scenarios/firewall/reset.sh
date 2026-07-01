@@ -9,12 +9,7 @@
 #   bash scenarios/firewall/reset.sh
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-
-echo "firewall/reset: clearing prompt + knowledge overlay state..."
-rm -f "${REPO_ROOT}/agent/_overlay/prompt_overlay.txt" 2>/dev/null || true
-rm -f "${REPO_ROOT}/agent/_overlay/knowledge/firewall-overlay.md" 2>/dev/null || true
+echo "firewall/reset: trigger-level API reset is authoritative..."
 
 echo "firewall/reset: done — baseline restored."
 echo "  The control-plane trigger reset already cleared both overlays."

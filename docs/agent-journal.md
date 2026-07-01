@@ -37,8 +37,6 @@ Entries are append-only. Never delete or rewrite past entries.
 
 ---
 
----
-
 ## 2026-06-29 — SE feedback round: control-plane UX, web-first README, stage-up refresh flags
 
 **What:** Acted on a round of cold-SE feedback. Delegated (gpt-5.3-codex) the SE control-plane UI changes: scenarios now sort by a declarative `order` field (runbook order, shared by CLI + web), the playlist composer is click-driven instead of typed ids, and talk tracks open in a standalone copy-friendly HTML tab. Directly added `--build`/`--pull` passthrough to `scripts/stage-up.sh`, and refined `README.md` (removed stale phase block, made `uv sync` optional, demoted the standalone concierge from the primary interface map now that it is embedded in the storefront overlay).
@@ -695,3 +693,119 @@ entry — there is no user-facing change yet. No application code or config touc
 - Removed `.empty-state` entirely — no longer needed.
 
 **Effect on codebase / UX:** Changes confined to `web/concierge/frontend/src/App.jsx` and `web/concierge/frontend/src/styles.css`. On load, users now see a friendly concierge greeting bubble with three capability bullets; session details are accessible via a subtle "Session info ▸" link below the header.
+
+---
+
+## 2026-06-29 — V1 redesigned to stale snapshot fault
+
+**What:** Reworked V1 (`invisible-failure`) from a backend `productCatalogFailure` flag fault to an agent-tool seam stale-cache simulation using a new `tool_fault` mode `stale` on `get_product_details`. The fault now returns a scripted partial snapshot (name/category only) as a successful tool result.
+
+**Why:** The old V1 path could either degrade gracefully without ungrounded output or surface real backend errors in Splunk, which diluted the "infra green yet answer quality fails" narrative. Because this Galileo project runs `context_adherence` and `completeness` (but not correctness/ground-truth), the fault must omit requested fields (price/specs) so ungrounded claims are measurable.
+
+**Decisions / trade-offs:**
+- Preserved the closed trigger contract (`feature_flag|rag_corpus|tool_fault|prompt_overlay`) by adding a **mode** (`stale`) to `tool_fault`, not a new trigger type.
+- Stored stale payload under existing overlay plumbing (`tool_faults.json`) as `{"mode":"stale","data":"..."}` so reset semantics remain unchanged.
+- Updated `agent/overlay.py` to pass through full per-tool fault specs so `data` reaches `agent/tools.py` unchanged.
+- In `agent/tools.py`, stale-faulted tools now return scripted data directly and skip backend calls, ensuring the Splunk footprint stays green by design.
+- Refreshed V1 scenario prompt/talk-track and Splunk verifier attestation text to the new mechanism, with explicit instruction to re-attest via Splunk MCP/UI after live execution.
+
+**Effect on codebase / UX:** V1 now consistently demonstrates the intended wedge: Splunk operational health remains green for the concierge path while Galileo catches ungrounded price/spec claims from incomplete context. Expected signals remain unchanged (`context_adherence_low`, `ungrounded_claim`, `apm_all_green`). No files under `stage/opentelemetry-demo` were modified.
+
+## 2026-06-29 — Restrict stage-up local rebuild scope
+
+**What:** Updated `scripts/stage-up.sh` so `--build` derives local build targets from our override file and runs an explicit local-only `docker compose build` before `up`, rather than using `up --build`. Updated `scripts/README.md` usage text to match.
+
+**Why:** `up --build` rebuilt upstream demo services with build contexts, which conflicted with the documented intent of rebuilding only our local image(s) and made `--pull --build` wasteful.
+
+**Decisions / trade-offs:**
+- Chose a simple in-script YAML pattern parser for `services` + `build:` in `docker-compose.override.yml` to avoid extra dependencies.
+- Added a defensive fallback to `concierge-web` if parsing yields no services.
+- Kept `--pull` behavior and ordering intact (`pull` → local build → `up`).
+- Ran this as a parallel writer scoped away from `CHANGELOG.md`/`docs/agent-journal.md`/`docs/runbook.md` to avoid collision with the concurrent V1 redesign writer; the coordinator integrated the changelog/journal entries afterward.
+
+**Effect on codebase / UX:** Stage bring-up now matches docs and expected semantics: upstream images are pulled as-is, local image(s) are rebuilt only when requested, and default startup path remains unchanged.
+
+---
+
+## 2026-06-29 — Control-plane web Play made setup-only
+
+**What:** Updated the SE control-plane web Play flow so `Play (SSE)` performs setup only: it drains loadgen when `quiet_background` is set, applies the scenario trigger, streams those setup steps, and stops without driving the agent.
+
+**Why:** The web UI and endpoint defaults were auto-driving via `drive_prompt`, which conflicted with the intended SE workflow (SE manually drives concierge/storefront, then clicks Verify when ready).
+
+**Decisions / trade-offs:**
+- Set web play defaults to setup-only at both layers for defense in depth: backend web play defaults now use `no_drive=True`, and the frontend Play request always sends `no_drive=true`.
+- Kept the `no_drive` parameter available so explicit `no_drive=false` remains possible for future/operator override use without changing API shape.
+- Removed only the editable prompt-override control from scenario cards; preserved the read-only drive-prompt block and "Copy prompt" button so SEs can still copy the known-good prompt into the concierge UI.
+- Left Verify, Reset, Playlist, and CLI behavior unchanged.
+
+**Effect on codebase / UX:** Updated `web/control_plane/app.py`, `web/control_plane/static/app.js`, and `web/control_plane/README.md` so Play is setup-only by default and documented as such. Scenario cards no longer show a prompt-override input, but still show/copy the known-good drive prompt. SSE play output continues to include quiet-background drain and trigger-apply log lines, then returns with `drive_attempted=false` unless explicitly overridden.
+
+---
+
+## 2026-06-29 — Remove playlist from SE surfaces
+
+**What:** Removed the playlist feature from both SE control-plane surfaces: the web UI/API (`web/control_plane/**`) and the CLI (`control_plane/cli.py`), then scrubbed current operator-facing docs and helper script docs to reflect a `list / play / reset / verify` command set.
+
+**Why:** The active vignette set is small and already runbook-ordered, so playlist composition added UI/CLI complexity without improving execution flow during demos.
+
+**Decisions / trade-offs:**
+- Sequenced this work **after** the setup-only Play fix so `web/control_plane/**` edits did not collide in the same patch set.
+- Kept `message` and `duration_min` in the manifest contract (and all scenario YAML files untouched) because those fields remain useful scenario metadata shown by listing surfaces.
+- Removed playlist-only code paths end-to-end (backend route/model/helper, frontend chips/form/fetch/CSS, argparse subcommand/dispatch) instead of leaving dormant endpoints or hidden controls.
+- Limited doc cleanup to current operator/readme surfaces; left historical planning/audit references intact.
+
+**Effect on codebase / UX:** `web/control_plane` no longer exposes playlist controls or `/api/playlist`, and `scripts/control-plane.sh` / `python -m control_plane` no longer provide a `playlist` command. `message`/`duration_min` remain part of scenario manifests and still appear in `list` outputs.
+
+---
+
+## 2026-06-29 — API-driven trigger delivery for concierge overlays
+
+**What:** Replaced file-based overlay trigger delivery with authenticated concierge admin API delivery for `tool_fault`, `prompt_overlay`, and `rag_corpus`; migrated overlay state to in-memory storage; and rewired control-plane trigger handlers to POST scenario payloads to the running concierge service.
+
+**Why:** The host-written overlay path could not reliably reach the running `concierge-web` container, so agent-side trigger applies/resets were not a dependable runtime seam. We kept `feature_flag` on flagd (unchanged) and chose API delivery for rich scenario payload triggers instead of adding more flag-based indirection or bind-mounted overlay files, matching the SE preference for a cleaner signal path.
+
+**Decisions / trade-offs:**
+- Implemented fail-closed admin auth: when `CONCIERGE_ADMIN_TOKEN` is set, `/admin/reload` and `/admin/scenario/*` require `Authorization: Bearer <token>` with `secrets.compare_digest`; when unset, endpoints remain loopback-only.
+- Converted `agent/overlay.py` to process-global in-memory state guarded by `RLock` and removed file-overlay directory/env readers.
+- Preserved per-trigger reset semantics by tracking prompt-overlay knowledge docs separately from rag-corpus docs inside the concierge session manager, then merging before updating `agent.overlay` knowledge state.
+- Kept trigger payload sourcing and validation in scenario folders/triggers (closed 4-type trigger contract unchanged); only transport changed (filesystem writes -> concierge API POSTs).
+- Updated CLI play behavior for agent-side triggers to setup-only guidance (apply via API + print `drive_prompt`) and intentionally dropped headless `python -m agent` driving on those paths.
+
+**Effect on codebase / UX:** Agent-side trigger runs now apply against the running concierge service immediately through authenticated API calls, then session reload rebuilds agent state for subsequent turns. This unblocks containerized runs where filesystem overlays were invisible, while preserving deterministic reset behavior and leaving feature flags on the existing flagd mechanism.
+
+---
+
+## 2026-06-29 — TOFU auto-generation of CONCIERGE_ADMIN_TOKEN
+
+**What:** Added trust-on-first-use (TOFU) generation of `CONCIERGE_ADMIN_TOKEN` to `scripts/stage-up.sh` so the authenticated trigger-delivery path needs no manual token step. On first bring-up, an empty/missing token is generated and persisted to `.env`, then exported for docker compose substitution.
+
+**Why:** The fail-closed admin gate requires a shared secret between the containerized concierge and the host control-plane. A manual `openssl rand` step is easy to forget; forgetting it would leave the concierge on the loopback-only fallback, which the host-run control-plane cannot satisfy against the container. TOFU guarantees the token exists while leaving the auth gate as the sole enforcement layer.
+
+**Decisions / trade-offs:**
+- Reused the script's existing secret-safe discipline (mirroring `SPLUNK_ACCESS_TOKEN`): the token value is never echoed/logged; only a non-secret status line is printed (`generated ... (value hidden)` or `present (hidden)`).
+- Generation prefers `openssl rand -hex 32`, falling back to `head -c32 /dev/urandom | xxd -p -c256`, then `python3 -c 'import secrets;...'`, to avoid a hard dependency on any single tool.
+- Used a portable temp-file rewrite (not `sed -i`, which differs on BSD/macOS vs GNU): replace the `CONCIERGE_ADMIN_TOKEN=` line in place if present (even when empty), else append; the temp file is `chmod 600` before `mv`.
+- Added `CONCIERGE_ADMIN_TOKEN` to the existing `CONCIERGE_ENV_VARS` export list so it is read back and exported uniformly for compose `${...}` substitution (the TOFU step runs just before that loop).
+- Idempotent: a token already present is left untouched.
+
+**Effect on codebase / UX:** The live workflow drops to `scripts/stage-up.sh --build` with no manual token step — the container and host control-plane automatically share the generated token. Standalone host-only runs (`scripts/concierge-serve.sh`) still work via the loopback fallback when no token is set. `.env.example` and the runbook/READMEs were updated to reflect the auto-generation.
+
+---
+
+## 2026-06-29 — Fix: invisible-failure agent routed around the single-tool stale fault
+
+**What:** After the Option B migration, playing `invisible-failure` (setup-only) applied a `mode=stale` fault to `get_product_details`, but the concierge still answered with the real grounded price ($101.96). Traced it live against the running container and found the agent called the un-faulted sibling tool `search_products` to get the real catalog price. Fixed by faulting the whole product-read tool family.
+
+**Why:** `get_product_details`, `search_products`, and `get_recommendations` all read the same live product catalog (name/price/description). Faulting only one leaves grounded price/specs reachable through a sibling, so llama3.1:8b simply routed around the stale snapshot. Delivery, auth, the in-memory overlay singleton, and `reload()`-based session rebuild were all verified working — the defect was scenario/contract scope, not the Option B plumbing.
+
+**Evidence (live stack):**
+- Live catalog `OLJCESPC7Z` price is exactly `units:101, nanos:960000000` = $101.96 (matches the reported answer); its description contains no aperture/focal/magnification, so those specs are model priors (the intended ungrounded signal).
+- With only `get_product_details` faulted, the natural drive prompt returned "$101.96 USD — Source: search_products tool call"; a direct `search_products` probe also returned $101.96. Container runs a single uvicorn worker, so the overlay is a true process singleton.
+
+**Decisions / trade-offs:**
+- Added an optional `params.also_fault` list to the `tool_fault` trigger rather than changing the fixed trigger TYPE set or the concierge API. The agent-side overlay already supports a multi-tool fault map and `_apply_tool_faults` already iterates it, so the fix is delivery-only (control-plane sends one apply/reset per tool; the overlay accumulates) — no `agent/` or `web/concierge/` changes.
+- Kept `trigger.ref = get_product_details` as the narrative anchor (captions stay accurate) and added `search_products` + `get_recommendations` as `also_fault` siblings.
+- Did NOT switch to per-tool-call overlay reads: `reload()` already rebuilds the open chat's session on its next message (verified), and `mode=remove` structurally requires a graph rebuild (it changes the tool set), so build-time read remains the coherent design. Per-call read is noted as a rejected alternative.
+
+**Effect on codebase / UX:** Playing `invisible-failure` now faults all three catalog-read tools with the shared stale snapshot, so the agent cannot fetch a grounded price and must answer from the partial snapshot (or hallucinate) — restoring the ungrounded-answer punchline while Splunk stays green. Takes effect with just re-Play + a fresh chat message; no container restart needed (control-plane code is a host process; the concierge image is unchanged).

@@ -7,7 +7,7 @@ Thin FastAPI + SSE web wrapper over the existing `control_plane/` package.
 - Discovery uses `control_plane.registry.discover()` directly.
 - Trigger operations use `control_plane.triggers.apply_trigger()` and `reset_trigger()` directly.
 - Verification uses `control_plane.verification.run_verification()` directly.
-- Agent driving follows the existing CLI seam (`python -m agent`) as a subprocess.
+- Play from the web UI is setup-only by default: it applies triggers (and drains loadgen when `quiet_background` is set), then stops so the SE can drive the concierge manually.
 
 No `control_plane/` internals are modified.
 
@@ -18,7 +18,6 @@ No `control_plane/` internals are modified.
 - `POST /api/play` — synchronous play (JSON output).
 - `GET /api/play/stream` — SSE live stream for play output.
 - `POST /api/reset` — reset trigger + optional per-scenario reset script.
-- `POST /api/playlist` — compose by message pillar and budget.
 - `POST /api/verify` — synchronous verification report (JSON).
 - `GET /api/verify/stream` — SSE stream for verify progress/report.
 - `GET /healthz` — liveness.
@@ -51,7 +50,7 @@ Default bind is `127.0.0.1:${CONTROL_PLANE_WEB_PORT:-8099}`.
    - Call `GET /api/list` and confirm `<stub-id>` appears.
    - Delete the stub scenario folder.
 4. **SSE path checks (local only)**
-   - `GET /api/play/stream?...` emits trigger/apply + agent subprocess lines.
+   - `GET /api/play/stream?...` emits setup lines (quiet-background drain when configured + trigger apply) and then completes without driving the agent.
    - `GET /api/verify/stream?...` emits polling/progress lines and final report event.
 5. **CLI fallback unchanged**
    - `scripts/control-plane.sh list` still works.

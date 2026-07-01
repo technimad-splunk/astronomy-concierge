@@ -8,7 +8,6 @@
 #   scripts/control-plane.sh play  <scenario-id> [--prompt "..."] [--no-drive]
 #   scripts/control-plane.sh reset <scenario-id>
 #   scripts/control-plane.sh verify <scenario-id> [--timeout 30] [--interval 3]
-#   scripts/control-plane.sh playlist [--message <pillar>]... [--budget <min>]
 #
 # Adding a scenario is a drop-in folder under scenarios/ — this script and the
 # control plane never change (demo-design §7.2). All arguments pass through to

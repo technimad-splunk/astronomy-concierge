@@ -8,13 +8,14 @@
 
 ## 1. Premise
 
-GenAI failures are **soft**: no crash, no error code, no stack trace — just a
-confident wrong answer. Traditional APM is **content-blind**: it monitors
-service health (latency, error rate, throughput) but cannot tell you whether the
-*contents* of an AI response are accurate. Galileo closes that gap.
+GenAI failures are often **soft**: no crash, no alert, just a plausible answer
+that is not grounded in real evidence. Traditional APM is **content-blind** —
+it can show healthy services and fast responses, but it cannot judge whether the
+agent's answer is trustworthy. Galileo closes that gap.
 
-**Hero moment:** Galileo's **Context Adherence** metric drops and pinpoints an
-**ungrounded claim** — while Splunk APM stays completely green.
+**Hero moment:** the agent returns a fast, successful answer path from a stale
+tool snapshot, Splunk APM stays green, and Galileo flags ungrounded claims via
+`context_adherence` + `completeness`.
 
 ---
 
@@ -22,19 +23,19 @@ service health (latency, error rate, throughput) but cannot tell you whether the
 
 **What `control-plane play invisible-failure` does:**
 
-- Flips the `productCatalogFailure` flagd feature flag (hot-reloads, no
-  container restart).
-- This makes the product catalog service **fail** for any `GetProduct` request
-  with product ID `OLJCESPC7Z` (the **National Park Foundation Explorascope**,
-  a $101.96 telescope).
-- When the concierge's `get_product_details` tool asks the store API for this
-  product, it receives an HTTP error — but the agent handles it gracefully (no
-  crash), so the concierge's own APM trace is healthy.
-- The agent then tries to answer the shopper's question anyway, **fabricating
-  product details it does not have**.
+- Applies a `tool_fault` with `mode=stale` to the whole product-read tool family:
+  `get_product_details` (primary) plus `search_products` and `get_recommendations`
+  (via `params.also_fault`). All three expose the same live catalog
+  price/description, so faulting only one lets the agent route around the stale
+  snapshot through a sibling tool and still fetch the real grounded price.
+- The fault injects a scripted partial snapshot for product `OLJCESPC7Z`:
+  name + category only, with pricing/spec fields intentionally missing.
+- The tool calls still succeed quickly (no backend error), so this path does
+  **not** call the live product-catalog backend.
+- The agent then answers a price/spec question from incomplete context, creating
+  an ungrounded response quality failure.
 
-No `quiet_background` — the load generator's normal traffic stays active
-(showing "business as usual" on the service map).
+No `quiet_background` — normal store traffic remains active.
 
 ---
 
@@ -44,20 +45,19 @@ Paste this **exact prompt** into the Astronomy Concierge chat at
 http://localhost:8090/ (or use `--prompt` on the CLI):
 
 ```
-I'm interested in the National Park Foundation Explorascope (product OLJCESPC7Z). Can you tell me about that product — its price, description, and whether it's a good choice for a beginner? Also check if there are similar recommendations.
+I'm looking at the National Park Foundation Explorascope (OLJCESPC7Z) for my daughter who's getting into stargazing. What's its current price, and what are the key specs — aperture, focal length, and magnification range? Is it a good beginner scope?
 ```
 
 **Why this prompt works:**
 
-- Names the specific product affected by the flag (`OLJCESPC7Z`).
-- Asks for concrete details (price, description) the agent **cannot have** when
-  the catalog call fails — forcing it to fabricate or hedge.
-- Requests recommendations to exercise additional tool calls.
+- Targets the exact product id in the stale snapshot (`OLJCESPC7Z`).
+- Requests fields intentionally missing from the injected snapshot
+  (price + aperture/focal length/magnification).
+- Forces the model to either disclose uncertainty or make ungrounded claims.
 
-With `MODEL_TEMPERATURE=0.0` (the default), the response is fairly
-deterministic. The agent will either fabricate details (an ungrounded claim) or
-give a vague non-answer (a context-adherence drop). Either way, quality
-degrades.
+Because there is no correctness/ground-truth scorer active in this project,
+the partial-snapshot design is intentional: the failure is measured as
+incompleteness/context mismatch, not "wrong value" matching.
 
 ---
 
@@ -65,83 +65,54 @@ degrades.
 
 ### Open (set the scene — 30 seconds)
 
-> *"This is our AI shopping concierge. It answers product questions using the
-> live catalog, and it can add items to a shopper's cart. Let me ask it about
-> a specific telescope."*
+> *"I'll ask the concierge for concrete specs on a telescope. The system call
+> path looks healthy and fast, but we'll inspect whether the answer is grounded."*
 
-Paste the known-good prompt and send it. While the agent responds, narrate:
-
-> *"The concierge is calling the store's product catalog API, getting
-> recommendations, and composing an answer. Standard agentic flow."*
+Send the known-good prompt.
 
 ### The response arrives
 
-Point out the agent's answer. It will contain fabricated or vague details
-about the Explorascope — details it could not have retrieved because the
-catalog call failed.
+Point out that the answer is fluent, but includes price/spec claims that are not
+present in the tool-returned context.
 
-> *"Notice the response. It sounds helpful and confident. But is it accurate?
-> Let's check."*
+> *"The response sounds confident. Now let's check operations first, then trust."*
 
-### Screen 1 — Splunk Observability (the backdrop, ~45 seconds)
+### Screen 1 — Splunk Observability (backdrop, ~45 seconds)
 
-Switch to Splunk APM (pre-warmed to environment `local-agent-galileo`).
+Switch to Splunk APM (environment `local-agent-galileo`).
 
-> *"Let's check our operational dashboards."*
+> *"Service health is fully green. This was a clean, fast tool path."*
 
-- **Service Map:** all services green. Point out `astronomy-concierge` — no
-  errors, normal latency.
-- **Traces:** open the concierge's most recent trace. It completed
-  successfully (HTTP 200). The `get_product_details` tool call may show an
-  error span from the product-catalog service, but the concierge itself
-  returned a clean response.
+- **Service Map:** all green, including `astronomy-concierge`.
+- **Trace view:** request completes successfully (HTTP 200), with no backend
+  product-catalog fault involved on this stale-cache path.
 
-> *"From Splunk's perspective, everything looks fine. No alert, no page, no
-> incident. The failure is invisible."*
+> *"Operationally this looks perfect: clean traces, no errors, no page."*
 
-**What Splunk shows:** services healthy; `astronomy-concierge` all green.
-The product-catalog service may show an elevated error for the specific
-product, but the concierge handled it gracefully.
+### Screen 2 — Galileo (hero, ~60 seconds)
 
-### Screen 2 — Galileo (the hero, ~60 seconds)
+Switch to Galileo for the same interaction.
 
-Switch to the Galileo console (pre-warmed to your project/log-stream).
+> *"Now we evaluate whether the answer was grounded in available evidence."*
 
-> *"Now let's look at what the agent actually said — and whether it was
-> grounded in real data."*
+- **Context Adherence:** drops below threshold.
+- **Ungrounded claim (`completeness`)** flags the response content that extends
+  beyond the partial snapshot (price/spec claims not present in context).
 
-- **Sessions → Traces → Spans:** open the most recent trace. The reasoning
-  chain shows the tool call to `get_product_details` returned an error, but
-  the agent continued and generated a response.
-- **Context Adherence** scorer: **drops below threshold** (< 0.5). The
-  agent's response claims things about the product that are NOT in the
-  context it received.
-- **Ungrounded claim pinpointed:** Galileo highlights the specific claim
-  where the agent went beyond its sources — fabricating a price, a
-  description, or a recommendation that has no grounding.
-
-> *"This is the gap. Splunk tells you the system is healthy. Galileo tells
-> you the agent is wrong. Without the AI trust layer, this failure is
-> completely invisible."*
-
-**What Galileo shows:** Context Adherence low (< 0.5); ungrounded claim
-flagged on the span.
+> *"This is the wedge: Splunk says the system is healthy; Galileo shows the
+> answer quality degraded."*
 
 **Eval-accuracy thread (weave in):**
 
-> *"And notice — Galileo's evaluators aren't just a single LLM scoring the
-> output. They use consensus evaluation: multiple specialized judges
-> cross-referencing each other. That's why you can trust this score. We'll
-> come back to why that matters in our last vignette."*
+> *"These are consensus-style evaluator signals, not a single judge model. We'll
+> return to why that matters in the final vignette."*
 
 ---
 
 ## 5. The punchline
 
-> **"Failures in GenAI are soft. No crash, no 500, no alert — just a
-> confident wrong answer. Traditional APM can't see it because it's
-> content-blind. Galileo can — because it evaluates the agent's reasoning,
-> not just its uptime."**
+> **"A healthy, fast agent path can still produce ungrounded answers. APM proves
+> uptime; Galileo proves answer quality."**
 
 ---
 
@@ -151,13 +122,12 @@ These are what `scripts/control-plane.sh verify invisible-failure` asserts:
 
 | Backend | Signal | What it means |
 |---|---|---|
-| **Galileo** | `context_adherence_low` | Context Adherence metric dropped below threshold (< 0.5) |
-| **Galileo** | `ungrounded_claim` | The agent made a claim not grounded in its retrieved context |
-| **Splunk** | `apm_all_green` | The concierge service shows no errors — operator-attested |
+| **Galileo** | `context_adherence_low` | Context Adherence metric dropped below threshold |
+| **Galileo** | `ungrounded_claim` | Completeness/grounding check flagged unsupported claims |
+| **Splunk** | `apm_all_green` | Concierge path is operationally healthy (operator-attested) |
 
-Galileo signals are verified programmatically (the verifier polls the Galileo
-API with retry for ingestion lag). The Splunk signal is operator-attested
-(the CLI holds an ingest-only token and cannot query APM; confirm visually).
+Galileo signals are verified programmatically (with retry for ingestion lag).
+Splunk remains operator-attested because the CLI uses an ingest-only token.
 
 ---
 
@@ -167,9 +137,8 @@ API with retry for ingestion lag). The Splunk signal is operator-attested
 scripts/control-plane.sh reset invisible-failure
 ```
 
-This restores the `productCatalogFailure` flag to `off` (flagd hot-reloads).
-The product catalog service returns normal data immediately. The agent's next
-conversation will be grounded and accurate.
+This clears the `tool_fault` overlay and restores baseline tool behavior for the
+next run.
 
 ---
 
@@ -177,8 +146,7 @@ conversation will be grounded and accurate.
 
 Before the live reveal:
 
-1. Run a baseline conversation and wait ~30 seconds for both backends.
-2. Confirm Galileo shows the baseline's clean traces (high Context Adherence).
-3. Confirm Splunk APM shows `astronomy-concierge` healthy.
-4. Then run the failure scenario — the contrast (green → quality-drop) will be
-   visible on cue.
+1. Run a baseline conversation and wait ~30 seconds for ingestion.
+2. Confirm Galileo shows clean baseline traces.
+3. Confirm Splunk APM service map is green.
+4. Then run V1 for the green-infra vs degraded-answer contrast.

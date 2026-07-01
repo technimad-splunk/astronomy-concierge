@@ -2,11 +2,11 @@
 
 Primary layer: **Galileo** (guardrails). The scenario ships an overlay payload
 (e.g. a poisoned product review / prompt-injection string, or PII bait);
-``apply`` writes it to TWO overlay seams:
+``apply`` POSTs it to the running concierge service, which stores it in-memory
+across TWO overlay seams:
 
-1. ``agent/_overlay/prompt_overlay.txt`` — appended to the system prompt
-   (provides context for the model's behavior).
-2. ``agent/_overlay/knowledge/<scenario-id>-overlay.md`` — seeded into the RAG
+1. prompt overlay text — appended to the system prompt (provides model context).
+2. ``<scenario-id>-overlay.md`` — seeded into the RAG
    corpus overlay so the payload appears as a **tool output** in the
    conversation messages when the agent calls ``search_knowledge_base``.
 
@@ -23,22 +23,13 @@ to a text/markdown file; alternatively ``params.text`` provides inline text.
 
 from __future__ import annotations
 
-from pathlib import Path
-
-from agent.overlay import overlay_dir
-
+from ..concierge_client import post_apply, post_reset
 from ..manifest import Scenario
 from .base import Trigger, TriggerError, TriggerResult
 
 
 class PromptOverlayTrigger(Trigger):
     type = "prompt_overlay"
-
-    def _overlay_file(self) -> Path:
-        return overlay_dir() / "prompt_overlay.txt"
-
-    def _knowledge_overlay_file(self, scenario: Scenario) -> Path:
-        return overlay_dir() / "knowledge" / f"{scenario.id}-overlay.md"
 
     def _payload(self, scenario: Scenario) -> str:
         inline = scenario.trigger.params.get("text")
@@ -58,18 +49,14 @@ class PromptOverlayTrigger(Trigger):
 
     def apply(self, scenario: Scenario) -> TriggerResult:
         payload = self._payload(scenario)
-
-        # 1. Write to system-prompt overlay (model context).
-        dest = self._overlay_file()
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_text(payload + "\n", encoding="utf-8")
-
-        # 2. Also seed into the RAG knowledge overlay so the payload surfaces
-        #    as a tool output in conversation messages (the channel Galileo's
-        #    prompt_injection scorer evaluates).
-        knowledge_dest = self._knowledge_overlay_file(scenario)
-        knowledge_dest.parent.mkdir(parents=True, exist_ok=True)
-        knowledge_dest.write_text(payload + "\n", encoding="utf-8")
+        response = post_apply(
+            {
+                "scenario_id": scenario.id,
+                "trigger_type": self.type,
+                "prompt_overlay_text": payload,
+            }
+        )
+        rebuilt = int(response.get("rebuilt_sessions", 0))
 
         preview = payload.splitlines()[0][:80] if payload else ""
         return TriggerResult(
@@ -77,28 +64,31 @@ class PromptOverlayTrigger(Trigger):
             type=self.type,
             ref=scenario.trigger.ref,
             summary=(
-                f"injected prompt overlay ({len(payload)} chars) into system prompt "
-                f"+ RAG knowledge overlay (dual-channel for scorer coverage)."
+                f"injected prompt overlay ({len(payload)} chars) via concierge API; "
+                f"rebuilt {rebuilt} session(s) with dual-channel injection coverage."
             ),
             before="(no overlay)",
             after=f"overlay active — starts: {preview!r}",
-            details=[f"prompt overlay: {dest}", f"knowledge overlay: {knowledge_dest}"],
+            details=[f"concierge: {response.get('status', 'applied')}"],
         )
 
     def reset(self, scenario: Scenario) -> TriggerResult:
-        dest = self._overlay_file()
-        knowledge_dest = self._knowledge_overlay_file(scenario)
-        existed = dest.is_file() or knowledge_dest.is_file()
-        dest.unlink(missing_ok=True)
-        knowledge_dest.unlink(missing_ok=True)
+        response = post_reset(
+            {
+                "scenario_id": scenario.id,
+                "trigger_type": self.type,
+            }
+        )
+        rebuilt = int(response.get("rebuilt_sessions", 0))
         return TriggerResult(
             action="reset",
             type=self.type,
             ref=scenario.trigger.ref,
-            summary="cleared prompt + knowledge overlay; baseline restored."
-            if existed
-            else "no prompt overlay was active (already baseline).",
-            before="overlay active" if existed else "(no overlay)",
+            summary=(
+                f"cleared prompt + knowledge overlay via concierge API; "
+                f"rebuilt {rebuilt} session(s)."
+            ),
+            before="overlay active",
             after="(no overlay)",
-            details=[f"prompt overlay: {dest}", f"knowledge overlay: {knowledge_dest}"],
+            details=[f"concierge: {response.get('status', 'reset')}"],
         )

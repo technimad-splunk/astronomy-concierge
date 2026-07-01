@@ -57,16 +57,16 @@ or re-theming the store (design §9.5 keeps the Astronomy Shop theme).
 | **Control plane** | `control_plane/` package, **CLI** (`python -m control_plane …`). | `registry.discover()` auto-finds `scenarios/*/scenario.yaml`; `apply_trigger`/`reset_trigger` over the four fixed triggers; `play` shells out to `python -m agent` as a subprocess; `verify` polls Galileo with retry. Stable seam: adding scenarios never edits the package. |
 | **Stage** | Vendored upstream OTel demo (the Astronomy Shop), **gitignored clone pinned to `stage/demo.ref` (`2.2.0`)**, materialized by `scripts/stage-setup.sh`. | `frontend` = Next.js/React behind the **Envoy `frontend-proxy` at `:8080`**; `flagd` hot-reloads `src/flagd/demo.flagd.json`. Our only touches are **tracked overrides re-synced into the clone** by setup: `otelcol-config-extras.yml` (Splunk export via the collector's documented extras merge) and `docker-compose.override.yml` (collector ports + `SPLUNK_*`). **We never hand-edit the clone.** |
 
-**Trigger → agent seam (today).** Three of the four triggers write to the gitignored overlay
-`agent/_overlay/` and the agent reads them **when it builds the graph/tools** (i.e. at process/
-session start, not per request):
+**Trigger → agent seam (current).** Three of the four triggers POST payloads to the
+running concierge admin API, which stores in-memory overlay state that the agent
+reads when it builds the graph/tools (i.e. at process/session start, not per request):
 
 | Trigger | Writes | Read by | When it takes effect today |
 |---|---|---|---|
 | `feature_flag` | edits vendored `demo.flagd.json` | the demo's services | immediately (flagd hot-reloads) |
-| `rag_corpus` | `agent/_overlay/knowledge/*.md` | `agent/rag.py` | next corpus load (note: `rag.py` uses `lru_cache`) |
-| `prompt_overlay` | `agent/_overlay/prompt_overlay.txt` | `agent/graph.py` | next `build_concierge()` |
-| `tool_fault` | `agent/_overlay/tool_faults.json` | `agent/tools.py` | next `make_tools()` |
+| `rag_corpus` | `POST /admin/scenario/apply` with `rag_corpus_docs` | `agent/rag.py` | next corpus load (note: `rag.py` uses `lru_cache`) |
+| `prompt_overlay` | `POST /admin/scenario/apply` with `prompt_overlay_text` | `agent/graph.py` | next `build_concierge()` |
+| `tool_fault` | `POST /admin/scenario/apply` with `tool_fault` spec | `agent/tools.py` | next `make_tools()` |
 
 The CLI sidesteps freshness entirely: every `play` is a **new agent process**, so overlays are
 always read fresh. **A long-lived service breaks that assumption** — see [§6](#6-trigger-hot-reload-on-a-long-lived-agent).
@@ -93,8 +93,8 @@ over the same cores.
                                    │  • setup_telemetry() ONCE     │        │  • registry / triggers / verify │
                                    │  • per-session graph build    │        │  • streams play/verify output    │
                                    └───────────────┬──────────────┘        └───────────────┬──────────────┘
-                                                   │                                         │ writes overlays / flips flags
-                  gen_ai.* spans + GenAI metrics   │  GalileoCallback                        │ (agent/_overlay, demo.flagd.json)
+                                                   │                                         │ applies admin APIs / flips flags
+                  gen_ai.* spans + GenAI metrics   │  GalileoCallback                        │ (/admin/scenario/*, demo.flagd.json)
                        (OTLP → local collector)    │  (Sessions→Traces→Spans)                ▼
                                                    ▼                              (the stable trigger seam — unchanged)
                           Splunk OTel Collector ──▶ Splunk Observability            ◀────────┘
@@ -216,21 +216,21 @@ telemetry is preserved either way**, extending the existing two-runtime split (d
 
 ## 6. Contentious decision C — trigger hot-reload on a long-lived agent
 
-Today every `play` is a fresh process, so overlays are always read fresh. A long-running service
+Today every `play` is a fresh process, so trigger state is always read fresh. A long-running service
 must decide **how an SE's just-applied trigger takes effect** — **without** breaking the
-"drop-in scenario, no core edits" seam (`overlay.py` stays the read seam; the control plane keeps
-just writing files).
+"drop-in scenario, no core edits" seam (`overlay.py` stays the read seam; the control plane sends
+payloads through concierge admin APIs).
 
 | Option | How | Pros | Cons |
 |---|---|---|---|
 | **(a) Per-session overlay read** (recommended) | Build the graph + tools (and read the corpus) **when a new chat session starts**, via the existing `overlay.py` seam | No new control-plane↔agent coupling; seam untouched; matches SE flow (apply → open a fresh chat → behaviour applies; reset → next fresh chat is baseline) | An **in-flight** conversation keeps its overlay until a new session (acceptable, even desirable for demo stability) |
-| **(b) File-watcher hot-reload** | Service watches `agent/_overlay/` + `demo.flagd.json`, rebuilds on change | Mid-conversation changes apply | More moving parts; races mid-turn; debounce needed |
+| **(b) File-watcher hot-reload** | Service watches in-memory/admin trigger state + `demo.flagd.json`, rebuilds on change | Mid-conversation changes apply | More moving parts; races mid-turn; debounce needed |
 | **(c) Signal / admin endpoint** | Control plane signals the service (`SIGHUP` or `POST /admin/reload`) to rebuild | Explicit, immediate | Couples the control plane to the running service (knows its PID/URL) — erodes the clean seam |
 
 **Recommendation: (a) per-session overlay read**, optionally with a **localhost-only
 `POST /admin/reload`** convenience so the control-plane UI can force a rebuild without asking the
-SE to open a new chat. Rationale: it preserves the stable seam (control plane still only *writes*
-overlay files; the agent still only *reads* them), needs no watcher/signal machinery, and fits
+SE to open a new chat. Rationale: it preserves the stable seam (control plane sends admin payloads;
+the agent only reads overlay state), needs no watcher/signal machinery, and fits
 the demo cadence. `feature_flag` already hot-reloads via flagd, so only the three agent-side
 overlays are in scope.
 

@@ -56,7 +56,7 @@ class PlayRequest(BaseModel):
     id: str
     prompt: str | None = None
     session_id: str | None = None
-    no_drive: bool = False
+    no_drive: bool = True
 
 
 class ResetRequest(BaseModel):
@@ -67,12 +67,6 @@ class VerifyRequest(BaseModel):
     id: str
     timeout: float = Field(default=DEFAULT_TIMEOUT_S, gt=0)
     interval: float = Field(default=DEFAULT_INTERVAL_S, gt=0)
-
-
-class PlaylistRequest(BaseModel):
-    ids: list[str] | None = None
-    message: list[str] | None = None
-    budget: int | None = Field(default=None, gt=0)
 
 
 @dataclass
@@ -359,25 +353,6 @@ def _trigger_result_lines(result: TriggerResult) -> list[str]:
     return lines
 
 
-def _compose_playlist(reg: Registry, req: PlaylistRequest) -> tuple[list[Scenario], int]:
-    scenarios = list(reg.scenarios)
-    if req.ids:
-        wanted_ids = set(req.ids)
-        scenarios = [s for s in scenarios if s.id in wanted_ids]
-    if req.message:
-        wanted = set(req.message)
-        scenarios = [s for s in scenarios if s.message in wanted]
-
-    chosen: list[Scenario] = []
-    total = 0
-    for scenario in scenarios:
-        if req.budget is not None and total + scenario.duration_min > req.budget:
-            continue
-        chosen.append(scenario)
-        total += scenario.duration_min
-    return chosen, total
-
-
 def _run_loadgen(action: str, emit: Callable[[str], None]) -> bool:
     script = REPO_ROOT / "scripts" / "loadgen.sh"
     if not script.is_file():
@@ -588,7 +563,7 @@ def create_app() -> FastAPI:
         request: Request,
         prompt: str | None = None,
         session_id: str | None = None,
-        no_drive: bool = False,
+        no_drive: bool = True,
         csrf_token: str | None = None,
     ):
         _enforce_csrf_query(request, csrf_token)
@@ -710,17 +685,6 @@ def create_app() -> FastAPI:
             yield {"event": "done", "data": json.dumps(summary)}
 
         return EventSourceResponse(event_gen())
-
-    @app.post("/api/playlist")
-    async def api_playlist(request: Request, payload: PlaylistRequest):
-        _enforce_csrf(request)
-        reg = discover()
-        chosen, total = _compose_playlist(reg, payload)
-        return {
-            "total_duration_min": total,
-            "count": len(chosen),
-            "scenarios": [_scenario_payload(s) for s in chosen],
-        }
 
     @app.exception_handler(HTTPException)
     async def http_error_handler(_: Request, exc: HTTPException):

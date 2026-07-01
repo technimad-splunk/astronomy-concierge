@@ -55,7 +55,7 @@ uv sync                     # or: pip install -e .
 | `agent/` | The Python AI shopping concierge (LangGraph). Holds the model-provider abstraction today; RAG + tools + OTel fan-out land in Phase 2. |
 | `stage/` | The forked OpenTelemetry "Astronomy Shop" + Splunk OTel Collector wiring (Phase 1). |
 | `scenarios/` | The pluggable vignette library — each vignette is a drop-in folder with a `scenario.yaml`. Includes the reference `invisible-failure/` and Phase-3 harness stubs (`stub-*`). |
-| `control_plane/` | The SE control-plane + harness package (Phase 3): scenario registry, manifest loader, the four trigger handlers, pluggable `expected_signals` verification, the `list/play/reset/verify/playlist` CLI, and the SE-facing `README.md`. |
+| `control_plane/` | The SE control-plane + harness package (Phase 3): scenario registry, manifest loader, the four trigger handlers, pluggable `expected_signals` verification, the `list/play/reset/verify` CLI, and the SE-facing `README.md`. |
 | `scripts/` | Automation & verification helpers (e.g. connectivity checks). |
 | `docs/` | Design, implementation plan, and the agent journal. |
 
@@ -72,6 +72,8 @@ Start the environment in this order:
 # 1. Configure: copy the template and fill in your tokens (GALILEO_*, SPLUNK_*,
 #    and your model-provider keys). See the comments in the file.
 cp .env.example .env
+# CONCIERGE_ADMIN_TOKEN is auto-generated and saved to .env on first
+# scripts/stage-up.sh (trust-on-first-use) — no manual step needed.
 
 # 2. Recommended: verify your backends/tokens are reachable (secret-safe).
 scripts/check-connectivity.sh
@@ -127,17 +129,17 @@ For automation or when you prefer the terminal, use:
 
 ```sh
 scripts/control-plane.sh list                         # discover all scenarios
-scripts/control-plane.sh play  invisible-failure --prompt "..."   # apply trigger + drive the agent
+scripts/control-plane.sh play  invisible-failure --prompt "..."   # apply trigger; drive via concierge web chat
 scripts/control-plane.sh reset invisible-failure      # restore baseline
 scripts/control-plane.sh verify invisible-failure     # auto-verify expected_signals (Galileo real)
-scripts/control-plane.sh playlist --message demo --budget 3       # compose a run
 ```
 
 The **four fixed triggers** (`feature_flag | rag_corpus | tool_fault |
 prompt_overlay`) each `apply` a fault and `reset` it deterministically;
 `feature_flag` flips a flagd flag in the running stage, while the other three
-write to a stable agent overlay seam (`agent/_overlay/`) that `agent/` reads on
-its next run — so scenarios never edit core. The concierge is instrumented
+are delivered to the running concierge through authenticated admin API endpoints
+(`/admin/scenario/apply` and `/admin/scenario/reset`) that mutate in-memory
+overlay state and rebuild sessions for the next turn. The concierge is instrumented
 **once** with OpenTelemetry GenAI (`gen_ai.*` spans + GenAI histogram metrics)
 and fans the same telemetry out to **both** Galileo (Sessions → Traces → Spans)
 and Splunk (APM + AI Agent Monitoring under `local-agent-galileo`). The

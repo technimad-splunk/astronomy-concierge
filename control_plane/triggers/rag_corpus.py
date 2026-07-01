@@ -1,9 +1,10 @@
 """``rag_corpus`` trigger — overlay the agent's RAG corpus with a variant.
 
 Primary layer: **Galileo** (groundedness). The scenario ships a corpus variant
-(stale/poisoned docs); ``apply`` layers it over ``agent/knowledge`` via the stable
-overlay seam (``agent/_overlay/knowledge/``), so the concierge retrieves the
-scenario's docs instead of the baseline ones. ``reset`` drops the overlay.
+(stale/poisoned docs); ``apply`` POSTs the docs to the running concierge's
+authenticated admin API, which layers them over ``agent/knowledge`` in-memory,
+so the concierge retrieves the scenario's docs instead of the baseline ones.
+``reset`` drops that in-memory overlay.
 
 Non-destructive: the baseline corpus on disk is never modified — an overlay file
 with the same name shadows a baseline doc; new names are added. Reset simply
@@ -15,11 +16,9 @@ subdirectory (default: the value of ``ref``); ``params.source`` can override it.
 
 from __future__ import annotations
 
-import shutil
 from pathlib import Path
 
-from agent.overlay import overlay_dir
-
+from ..concierge_client import post_apply, post_reset
 from ..manifest import Scenario
 from .base import Trigger, TriggerError, TriggerResult
 
@@ -41,40 +40,49 @@ class RagCorpusTrigger(Trigger):
             raise TriggerError(f"rag_corpus source {src} contains no .md documents.")
         return src
 
-    def _overlay_knowledge(self) -> Path:
-        return overlay_dir() / "knowledge"
-
     def apply(self, scenario: Scenario) -> TriggerResult:
         src = self._source_dir(scenario)
-        dest = self._overlay_knowledge()
-        dest.mkdir(parents=True, exist_ok=True)
-        copied = []
+        docs: dict[str, str] = {}
         for doc in sorted(src.glob("*.md")):
-            shutil.copy2(doc, dest / doc.name)
-            copied.append(doc.name)
+            docs[doc.name] = doc.read_text(encoding="utf-8")
+        response = post_apply(
+            {
+                "scenario_id": scenario.id,
+                "trigger_type": self.type,
+                "rag_corpus_docs": docs,
+            }
+        )
+        rebuilt = int(response.get("rebuilt_sessions", 0))
         return TriggerResult(
             action="apply",
             type=self.type,
             ref=scenario.trigger.ref,
-            summary=f"overlaid {len(copied)} corpus doc(s) onto agent/knowledge: {', '.join(copied)}.",
+            summary=(
+                f"overlaid {len(docs)} corpus doc(s) via concierge API; "
+                f"rebuilt {rebuilt} session(s)."
+            ),
             before="(baseline corpus)",
-            after=f"overlay active ({len(copied)} doc(s))",
-            details=[f"overlay: {dest}", f"source: {src}"],
+            after=f"overlay active ({len(docs)} doc(s))",
+            details=[f"source: {src}", f"concierge: {response.get('status', 'applied')}"],
         )
 
     def reset(self, scenario: Scenario) -> TriggerResult:
-        dest = self._overlay_knowledge()
-        existed = dest.is_dir()
-        if existed:
-            shutil.rmtree(dest)
+        response = post_reset(
+            {
+                "scenario_id": scenario.id,
+                "trigger_type": self.type,
+            }
+        )
+        rebuilt = int(response.get("rebuilt_sessions", 0))
         return TriggerResult(
             action="reset",
             type=self.type,
             ref=scenario.trigger.ref,
-            summary="removed RAG corpus overlay; baseline corpus restored."
-            if existed
-            else "no RAG corpus overlay was active (already baseline).",
-            before="overlay active" if existed else "(baseline corpus)",
+            summary=(
+                f"removed RAG corpus overlay via concierge API; "
+                f"rebuilt {rebuilt} session(s)."
+            ),
+            before="overlay active",
             after="(baseline corpus)",
-            details=[f"overlay: {dest}"],
+            details=[f"concierge: {response.get('status', 'reset')}"],
         )

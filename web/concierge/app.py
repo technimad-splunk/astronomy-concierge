@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
+import secrets
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated
@@ -22,12 +24,26 @@ from agent.telemetry import setup_telemetry
 from .service import ConciergeSessionManager
 
 _CONVERSATION_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+_SCENARIO_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 # The shared shopper / cart id. The storefront uses a UUIDv4; the concierge may
 # generate its own UUID. Accept the same safe charset as conversation ids.
 _CART_USER_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _FRONTEND_DIST = Path(__file__).parent / "frontend" / "dist"
 _EMBED_DIR = Path(__file__).parent / "embed"
 _REPO_ROOT = Path(__file__).resolve().parents[2]
+_LOGGER = logging.getLogger(__name__)
+_TOOL_MODES = {"error", "remove", "stale"}
+_SCENARIO_TRIGGER_TYPES = {"tool_fault", "prompt_overlay", "rag_corpus"}
+_KNOWN_AGENT_TOOLS = {
+    "search_knowledge_base",
+    "search_products",
+    "get_product_details",
+    "get_recommendations",
+    "add_to_cart",
+    "view_cart",
+    "checkout",
+    "list_currencies",
+}
 
 
 def _normalize_message(message: str) -> str:
@@ -65,6 +81,24 @@ def _loopback_only(request: Request) -> bool:
     return host in {"127.0.0.1", "::1", "localhost"}
 
 
+def _admin_token() -> str:
+    return os.getenv("CONCIERGE_ADMIN_TOKEN", "").strip()
+
+
+def _require_admin(request: Request) -> None:
+    token = _admin_token()
+    if token:
+        auth = request.headers.get("Authorization", "")
+        if not auth.startswith("Bearer "):
+            raise HTTPException(status_code=401, detail="unauthorized")
+        supplied = auth.removeprefix("Bearer ").strip()
+        if not secrets.compare_digest(supplied, token):
+            raise HTTPException(status_code=401, detail="unauthorized")
+        return
+    if not _loopback_only(request):
+        raise HTTPException(status_code=403, detail="admin endpoint is loopback-only")
+
+
 class ChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=4000)
     conversation_id: str | None = Field(default=None, max_length=64)
@@ -90,6 +124,75 @@ class ChatResponse(BaseModel):
     conversation_id: str
     session_id: str
     reply: str
+
+
+class ToolFaultSpec(BaseModel):
+    tool: str = Field(min_length=1, max_length=64)
+    mode: str
+    message: str = Field(default="", max_length=2000)
+    data: str | None = Field(default=None, max_length=20000)
+
+    @field_validator("mode")
+    @classmethod
+    def _validate_mode(cls, value: str) -> str:
+        if value not in _TOOL_MODES:
+            raise ValueError(f"mode must be one of {sorted(_TOOL_MODES)}")
+        return value
+
+    @field_validator("data")
+    @classmethod
+    def _validate_stale_data(cls, value: str | None, info):
+        mode = info.data.get("mode")
+        if mode == "stale" and not (value and value.strip()):
+            raise ValueError("data is required when mode='stale'")
+        return value
+
+
+class ScenarioApplyRequest(BaseModel):
+    scenario_id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,64}$")
+    trigger_type: str
+    tool_fault: ToolFaultSpec | None = None
+    prompt_overlay_text: str | None = Field(default=None, max_length=50000)
+    rag_corpus_docs: dict[str, str] | None = None
+
+    @field_validator("trigger_type")
+    @classmethod
+    def _validate_trigger_type(cls, value: str) -> str:
+        if value not in _SCENARIO_TRIGGER_TYPES:
+            raise ValueError(f"trigger_type must be one of {sorted(_SCENARIO_TRIGGER_TYPES)}")
+        return value
+
+    @field_validator("scenario_id")
+    @classmethod
+    def _validate_scenario_id(cls, value: str) -> str:
+        if not _SCENARIO_ID_RE.match(value):
+            raise ValueError("scenario_id must match ^[A-Za-z0-9_-]{1,64}$")
+        return value
+
+    @field_validator("rag_corpus_docs")
+    @classmethod
+    def _validate_docs(cls, value: dict[str, str] | None) -> dict[str, str] | None:
+        if value is None:
+            return value
+        normalized: dict[str, str] = {}
+        for name, content in value.items():
+            if not isinstance(name, str) or not name.strip():
+                raise ValueError("rag_corpus_docs keys must be non-empty strings")
+            normalized[name] = str(content)
+        return normalized
+
+
+class ScenarioResetRequest(BaseModel):
+    scenario_id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,64}$")
+    trigger_type: str
+    ref: str | None = None
+
+    @field_validator("trigger_type")
+    @classmethod
+    def _validate_trigger_type(cls, value: str) -> str:
+        if value not in _SCENARIO_TRIGGER_TYPES:
+            raise ValueError(f"trigger_type must be one of {sorted(_SCENARIO_TRIGGER_TYPES)}")
+        return value
 
 
 @asynccontextmanager
@@ -218,10 +321,86 @@ async def chat_stream(
 
 @app.post("/admin/reload")
 async def admin_reload(request: Request) -> dict[str, int | str]:
-    if not _loopback_only(request):
-        raise HTTPException(status_code=403, detail="admin reload is loopback-only")
+    _require_admin(request)
     cleared = await _manager(request).reload()
     return {"status": "reloaded", "cleared_sessions": cleared}
+
+
+@app.post("/admin/scenario/apply")
+async def admin_apply_scenario(
+    payload: ScenarioApplyRequest, request: Request
+) -> dict[str, int | str]:
+    _require_admin(request)
+
+    if payload.trigger_type == "tool_fault":
+        if payload.tool_fault is None:
+            raise HTTPException(status_code=422, detail="tool_fault payload is required")
+        if payload.tool_fault.tool not in _KNOWN_AGENT_TOOLS:
+            raise HTTPException(
+                status_code=422,
+                detail=f"unknown tool '{payload.tool_fault.tool}'",
+            )
+    elif payload.trigger_type == "prompt_overlay":
+        if not (payload.prompt_overlay_text and payload.prompt_overlay_text.strip()):
+            raise HTTPException(status_code=422, detail="prompt_overlay_text is required")
+    elif payload.trigger_type == "rag_corpus":
+        if not payload.rag_corpus_docs:
+            raise HTTPException(status_code=422, detail="rag_corpus_docs is required")
+
+    _LOGGER.info(
+        "scenario apply requested",
+        extra={
+            "scenario_id": payload.scenario_id,
+            "trigger_type": payload.trigger_type,
+            "tool": payload.tool_fault.tool if payload.tool_fault else "",
+            "mode": payload.tool_fault.mode if payload.tool_fault else "",
+            "prompt_overlay_len": len(payload.prompt_overlay_text or ""),
+            "rag_doc_count": len(payload.rag_corpus_docs or {}),
+            "rag_total_chars": sum(len(v) for v in (payload.rag_corpus_docs or {}).values()),
+            "stale_data_len": len(payload.tool_fault.data or "") if payload.tool_fault else 0,
+            "message_len": len(payload.tool_fault.message or "") if payload.tool_fault else 0,
+        },
+    )
+    try:
+        rebuilt = await _manager(request).apply_overlay(payload.model_dump())
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {
+        "status": "applied",
+        "scenario_id": payload.scenario_id,
+        "trigger_type": payload.trigger_type,
+        "rebuilt_sessions": rebuilt,
+    }
+
+
+@app.post("/admin/scenario/reset")
+async def admin_reset_scenario(
+    payload: ScenarioResetRequest, request: Request
+) -> dict[str, int | str]:
+    _require_admin(request)
+    if payload.trigger_type == "tool_fault" and not (payload.ref and payload.ref.strip()):
+        raise HTTPException(status_code=422, detail="ref is required for tool_fault reset")
+    if payload.trigger_type == "tool_fault" and payload.ref not in _KNOWN_AGENT_TOOLS:
+        raise HTTPException(status_code=422, detail=f"unknown tool '{payload.ref}'")
+
+    _LOGGER.info(
+        "scenario reset requested",
+        extra={
+            "scenario_id": payload.scenario_id,
+            "trigger_type": payload.trigger_type,
+            "tool": payload.ref or "",
+        },
+    )
+    try:
+        rebuilt = await _manager(request).reset_overlay(payload.model_dump())
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {
+        "status": "reset",
+        "scenario_id": payload.scenario_id,
+        "trigger_type": payload.trigger_type,
+        "rebuilt_sessions": rebuilt,
+    }
 
 
 @app.get("/embed/concierge-bridge.js", include_in_schema=False)

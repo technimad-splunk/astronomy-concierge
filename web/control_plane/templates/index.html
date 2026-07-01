@@ -9,7 +9,7 @@
   <body>
     <header>
       <h1>SE Control-Plane UI</h1>
-      <p>Scenario list, play/reset/verify, playlist composer, and live logs.</p>
+      <p>Scenario list, setup-only play/reset/verify, and live logs.</p>
     </header>
 
     <main>
@@ -23,18 +23,6 @@
         <button id="runbook-btn" type="button">Open Runbook</button>
         <div id="registry-errors" class="errors"></div>
         <div id="scenario-list"></div>
-      </section>
-
-      <section class="panel">
-        <h2>Playlist Composer</h2>
-        <form id="playlist-form">
-          <label>Select scenarios</label>
-          <div id="playlist-scenario-picker" class="playlist-picker" aria-live="polite"></div>
-          <label for="playlist-budget">Budget (minutes, optional)</label>
-          <input id="playlist-budget" type="number" min="1" />
-          <button type="submit">Compose Playlist</button>
-        </form>
-        <pre id="playlist-output"></pre>
       </section>
 
       <section class="panel">

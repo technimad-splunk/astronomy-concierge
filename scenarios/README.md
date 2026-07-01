@@ -14,8 +14,8 @@ Each vignette ships a manifest the registry auto-discovers
 |---|---|
 | `id` | Unique scenario id (matches the folder name). |
 | `title` | Human-readable name shown in the control plane. |
-| `message` | Which reliability pillar it proves — used to compose SE playlists. |
-| `duration_min` | Approximate runtime, for playlist budgeting. |
+| `message` | Which reliability pillar it proves; shown in control-plane listings. |
+| `duration_min` | Approximate runtime shown by control-plane listing surfaces. |
 | `trigger` | How the failure is **induced** (no reliance on luck). One of the four fixed types below, plus a `ref`. |
 | `expected_signals` | The Galileo + Splunk signals the vignette promises will fire — used for auto-verification. |
 | `talk_track` | Path (relative to the scenario folder) to the SE caption / talk-track file. |

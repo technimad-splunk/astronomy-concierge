@@ -11,8 +11,8 @@ drop-in folders under ``scenarios/`` — never core edits (demo-design §7):
   ``apply()`` + ``reset()``.
 - :mod:`control_plane.verification` — pluggable per-backend ``expected_signals``
   verifiers (Galileo real; Splunk unverified-by-design — ingest-only token).
-- :mod:`control_plane.cli`        — the SE CLI: ``list / play / reset / verify /
-  playlist``. Run via ``python -m control_plane`` or ``scripts/control-plane.sh``.
+- :mod:`control_plane.cli`        — the SE CLI: ``list / play / reset / verify``.
+  Run via ``python -m control_plane`` or ``scripts/control-plane.sh``.
 
 The trigger set is fixed on purpose: scope creep there erodes the "drop-in
 folder" guarantee (demo-design §7.3).

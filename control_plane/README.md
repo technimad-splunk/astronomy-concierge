@@ -15,23 +15,29 @@ the control plane (demo-design §7.2).
 
 ```sh
 scripts/control-plane.sh list                       # discover every scenarios/*/scenario.yaml
-scripts/control-plane.sh play  <id> [--prompt "…"]  # apply the trigger (+ optionally drive the agent)
+scripts/control-plane.sh play  <id> [--prompt "…"]  # apply trigger; for agent-side triggers, drive via web chat
 scripts/control-plane.sh play  <id> --no-drive      # apply the trigger only
 scripts/control-plane.sh reset <id>                 # trigger-level reset + the scenario's reset.sh
 scripts/control-plane.sh verify <id> [--timeout 30] [--interval 3]   # auto-verify expected_signals
-scripts/control-plane.sh playlist [--message <pillar>]... [--budget <min>]   # compose a run
 ```
+
+`CONCIERGE_ADMIN_TOKEN` (which bearer-authenticates control-plane -> concierge
+trigger mutations) is auto-generated and saved to `.env` on first
+`scripts/stage-up.sh` (trust-on-first-use), so the host control-plane and the
+containerized concierge automatically share it — no manual step needed.
 
 - **list** — shows every drop-in folder discovered under `scenarios/` via the
   registry (and reports any folder whose manifest fails to validate, without
   breaking the rest of the listing).
-- **play** — applies the scenario's `trigger` (the fault is induced), then, if a
-  `--prompt` (or `trigger.params.drive_prompt`) is given, drives the concierge so
-  the run produces telemetry. `--no-drive` applies the trigger only. If the
-  scenario declares `quiet_background: true`, the Astronomy Shop's Locust
-  load-generator is **drained first** (via `scripts/loadgen.sh quiet`) so the
-  agent's traffic is the only store activity — useful when a single failing
-  checkout would be masked by continuous healthy background load.
+- **play** — applies the scenario's `trigger` (the fault is induced). For
+  `tool_fault`, `prompt_overlay`, and `rag_corpus`, the CLI applies the trigger
+  through the concierge admin API and prints the scenario drive prompt so you can
+  drive the run in the concierge web chat. `feature_flag` may still use CLI
+  driving when a prompt is provided. If the scenario declares
+  `quiet_background: true`, the Astronomy Shop's Locust load-generator is
+  **drained first** (via `scripts/loadgen.sh quiet`) so the agent's traffic is
+  the only store activity — useful when a single failing checkout would be
+  masked by continuous healthy background load.
 - **reset** — runs the **trigger-level reset** (authoritative, deterministic) and
   then the scenario's `reset.sh` if present. Restores baseline. **Always**
   restores the load-generator (via `scripts/loadgen.sh restore`, idempotent) so
@@ -43,9 +49,6 @@ scripts/control-plane.sh playlist [--message <pillar>]... [--budget <min>]   # c
   (`prompt_injection_detected`, `pii_exposed`). The Splunk `apm_all_green`
   signal is reported **attested** (operator-verified out-of-band, with embedded
   evidence — the CLI's ingest-only token can't query APM; see below).
-- **playlist** — composes a run by selecting/ordering scenarios keyed by `message`
-  (pillar) and fitting a `--budget` time budget (minutes).
-
 ## `quiet_background` and `scripts/loadgen.sh`
 
 Some scenarios need the demo's background load silenced so the agent's traffic
@@ -72,13 +75,14 @@ Each handler has `apply()` + `reset()`:
 | `trigger.type` | `apply` does… | `reset` does… | Reads it |
 |---|---|---|---|
 | `feature_flag` | sets the named flagd flag's `defaultVariant` to "on" in the running stage (flagd hot-reloads) | restores the original variant (saved under `.harness/state/`) | the demo's services |
-| `rag_corpus` | overlays the scenario's `*.md` onto `agent/knowledge` via `agent/_overlay/knowledge/` (non-destructive) | removes the overlay dir | `agent/rag.py` |
-| `tool_fault` | records a fault for a named tool in `agent/_overlay/tool_faults.json` (`mode=error`/`remove`) | clears that tool's fault | `agent/tools.py` |
-| `prompt_overlay` | writes the scenario payload to `agent/_overlay/prompt_overlay.txt` (appended to the system prompt) | clears the overlay file | `agent/graph.py` |
+| `rag_corpus` | POSTs scenario `*.md` docs to concierge `/admin/scenario/apply` as in-memory knowledge overlay | POSTs `/admin/scenario/reset` to clear rag overlay | `agent/rag.py` |
+| `tool_fault` | POSTs a named tool fault spec (`mode=error`/`remove`/`stale`) to concierge `/admin/scenario/apply` | POSTs `/admin/scenario/reset` to clear that tool fault | `agent/tools.py` |
+| `prompt_overlay` | POSTs the scenario payload to concierge `/admin/scenario/apply` (system prompt + dual-channel knowledge doc) | POSTs `/admin/scenario/reset` to clear prompt overlay state | `agent/graph.py` |
 
-The agent-side triggers write to a stable **overlay seam** (`agent/_overlay/`,
-gitignored) that `agent/` reads on startup — so scenarios bend the agent **without
-core edits**. The agent picks up agent-side overlays on its **next run**.
+The agent-side triggers now deliver to the running concierge process over an
+authenticated admin API. The concierge stores overlay state in-memory, runs
+`/admin/reload` behavior to drain and rebuild sessions, and the next chat turn
+uses the updated trigger state without filesystem overlays.
 
 ## `expected_signals` auto-verification (demo-design §7.4)
 

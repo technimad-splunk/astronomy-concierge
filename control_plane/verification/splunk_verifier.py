@@ -34,27 +34,26 @@ from .base import SignalResult, SignalVerifier
 if TYPE_CHECKING:
     from ..manifest import Scenario
 
-# Live evidence gathered by the operator via the Splunk Observability APM MCP
-# (splunko11y) on 2026-06-18, environment local-agent-galileo (eu0), over a ~3h
-# window covering the vignette run. Concierge-scoped on purpose (see module doc).
+# Operator attestation guidance for V1 (`apm_all_green`) after the redesign to a
+# stale-tool snapshot fault. Concierge-scoped on purpose (see module doc).
 _APM_ALL_GREEN_ATTESTATION = (
-    "operator-attested: verified out-of-band via the Splunk APM o11y MCP on "
-    "2026-06-18; NOT auto-queryable from the CLI (control_plane holds an "
-    "ingest-only token, no APM query/management API access).\n"
-    "    Scope: the CONCIERGE PATH stayed green / the failure was operationally "
-    "invisible to APM — this is NOT a claim that every service is green (the "
-    "Astronomy Shop ships built-in background chaos).\n"
-    "    Evidence (env local-agent-galileo, eu0, ~3h window):\n"
-    "      - astronomy-concierge: requestCount=1, errorCount=0, metric "
-    "health=Ok, no detector alerts — the agent looked perfectly healthy in APM "
-    "while producing an ungrounded answer (the punchline).\n"
-    "      - product-catalog (the triggered service): requestCount=4285, "
-    "errorCount=8 (~0.2%), health=Ok.\n"
-    "      - all 25 services report metric-level health=Ok.\n"
-    "      - 6 store services (ad, recommendation, checkout, email, payment, "
-    "quote) show a detector entity_health.status=Critical with EMPTY alert "
-    "lists and absurd P99s — pre-existing demo chaos / stale detectors, NOT "
-    "caused by the vignette (exactly why apm_all_green is concierge-scoped)."
+    "operator-attested: expected/by-design footprint for the redesigned V1 "
+    "(stale snapshot at the agent tool seam), verified out-of-band via Splunk "
+    "APM MCP/UI after a live run. NOT auto-queryable from the CLI "
+    "(control_plane holds an ingest-only token, no APM query/management API "
+    "access).\n"
+    "    Scope: the CONCIERGE PATH should stay green / the degradation is "
+    "content-quality only. This is NOT a claim that every service in the demo "
+    "environment is green (the Astronomy Shop includes background chaos).\n"
+    "    Expected evidence to attest after live run:\n"
+    "      - astronomy-concierge request path remains healthy (errorCount=0; "
+    "health green) while the answer quality degrades.\n"
+    "      - for the stale-faulted product-details path, no product-catalog "
+    "backend call is made (cache-hit behavior at the tool seam).\n"
+    "      - service map remains operationally green for this path.\n"
+    "    IMPORTANT: re-attest this signal with fresh Splunk MCP/UI evidence "
+    "after running the redesigned scenario; prior productCatalogFailure-era "
+    "evidence is superseded."
 )
 
 # Any other (future) Splunk signal without an attestation is reported honestly

@@ -9,12 +9,7 @@
 #   bash scenarios/trust-the-judge/reset.sh
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-
-echo "trust-the-judge/reset: clearing prompt + knowledge overlay state..."
-rm -f "${REPO_ROOT}/agent/_overlay/prompt_overlay.txt" 2>/dev/null || true
-rm -f "${REPO_ROOT}/agent/_overlay/knowledge/trust-the-judge-overlay.md" 2>/dev/null || true
+echo "trust-the-judge/reset: trigger-level API reset is authoritative..."
 
 echo "trust-the-judge/reset: done — baseline restored."
 echo "  The control-plane trigger reset already cleared both overlays."

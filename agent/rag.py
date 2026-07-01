@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 
-from .overlay import knowledge_overlay_dir
+from .overlay import knowledge_overlay_docs
 
 KNOWLEDGE_DIR = Path(__file__).parent / "knowledge"
 _WORD_RE = re.compile(r"[a-z0-9]+")
@@ -70,20 +70,18 @@ def _split_into_chunks(source: str, content: str) -> list[Chunk]:
 def _load_corpus() -> tuple[list[Chunk], Counter]:
     """Load + chunk every markdown file once; also compute document frequency.
 
-    A scenario ``rag_corpus`` overlay (``agent/_overlay/knowledge/``) is layered
-    on top of the baseline corpus: an overlay file with the *same* name replaces
-    the baseline doc (e.g. a stale/poisoned variant), and new names are added.
-    The baseline corpus on disk is never mutated, so reset = drop the overlay.
+    A scenario overlay is layered on top of the baseline corpus: an overlay
+    document with the *same* name replaces the baseline doc (e.g. a
+    stale/poisoned variant), and new names are added. The baseline corpus on
+    disk is never mutated.
     """
     # filename -> markdown content, baseline first then overlay (overlay wins).
     sources: dict[str, str] = {}
     if KNOWLEDGE_DIR.is_dir():
         for path in sorted(KNOWLEDGE_DIR.glob("*.md")):
             sources[path.name] = path.read_text(encoding="utf-8")
-    overlay = knowledge_overlay_dir()
-    if overlay is not None:
-        for path in sorted(overlay.glob("*.md")):
-            sources[path.name] = path.read_text(encoding="utf-8")
+    for name, content in knowledge_overlay_docs().items():
+        sources[name] = content
 
     chunks: list[Chunk] = []
     for name in sorted(sources):

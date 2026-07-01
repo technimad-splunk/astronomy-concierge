@@ -8,8 +8,8 @@ Fields (all required unless noted):
 
 - ``id``               — unique scenario id (matches the folder name).
 - ``title``            — human-readable name shown in the control plane.
-- ``message``          — which reliability pillar it proves (for SE playlists).
-- ``duration_min``     — approximate runtime in minutes (for playlist budgeting).
+- ``message``          — scenario metadata label shown in control-plane listings.
+- ``duration_min``     — approximate runtime in minutes shown by ``list``.
 - ``trigger``          — how the failure is INDUCED:
     - ``type``         — one of the four FIXED mechanisms (demo-design §7.3).
     - ``ref``          — the flag / corpus / tool / overlay the trigger acts on.

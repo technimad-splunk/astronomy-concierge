@@ -25,9 +25,6 @@ web/concierge/frontend/dist/
 **/__pycache__/
 **/*.py[cod]
 
-# Agent runtime overlay state (gitignored)
-agent/_overlay/
-
 # Editor / OS cruft
 *.log
 .DS_Store

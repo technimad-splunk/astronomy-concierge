@@ -1,8 +1,6 @@
 const logPane = document.getElementById("live-log");
 const scenarioList = document.getElementById("scenario-list");
 const registryErrors = document.getElementById("registry-errors");
-const playlistOutput = document.getElementById("playlist-output");
-const playlistPicker = document.getElementById("playlist-scenario-picker");
 const fixtureToggle = document.getElementById("show-fixtures");
 const runbookButton = document.getElementById("runbook-btn");
 const modal = document.getElementById("doc-modal");
@@ -13,7 +11,6 @@ const modalCloseButton = document.getElementById("doc-close-btn");
 
 let activeStream = null;
 let visibleScenarios = [];
-const selectedPlaylistIds = new Set();
 
 function appendLog(line) {
   const ts = new Date().toISOString();
@@ -102,50 +99,6 @@ function openDocumentModal({ title, meta, html, emptyMessage }) {
   modal.classList.remove("hidden");
 }
 
-function renderPlaylistComposer() {
-  playlistPicker.innerHTML = "";
-  const selectable = visibleScenarios.filter((scenario) => !scenario.is_harness_fixture);
-  if (!selectable.length) {
-    const empty = document.createElement("p");
-    empty.className = "playlist-empty";
-    empty.textContent = "No scenarios available for playlist selection.";
-    playlistPicker.appendChild(empty);
-    return;
-  }
-
-  selectable.forEach((scenario) => {
-    const chip = document.createElement("button");
-    chip.type = "button";
-    chip.className = "playlist-chip";
-    if (selectedPlaylistIds.has(scenario.id)) {
-      chip.classList.add("selected");
-    }
-
-    const title = scenario.title ? `${scenario.id} — ${scenario.title}` : scenario.id;
-    const titleNode = document.createElement("span");
-    titleNode.className = "playlist-chip-title";
-    titleNode.textContent = title;
-    const metaNode = document.createElement("span");
-    metaNode.className = "playlist-chip-meta";
-    metaNode.textContent = `${scenario.message} · ${scenario.duration_min} min`;
-    chip.appendChild(titleNode);
-    chip.appendChild(metaNode);
-    chip.setAttribute("aria-pressed", selectedPlaylistIds.has(scenario.id) ? "true" : "false");
-    chip.addEventListener("click", () => {
-      if (selectedPlaylistIds.has(scenario.id)) {
-        selectedPlaylistIds.delete(scenario.id);
-        chip.classList.remove("selected");
-        chip.setAttribute("aria-pressed", "false");
-      } else {
-        selectedPlaylistIds.add(scenario.id);
-        chip.classList.add("selected");
-        chip.setAttribute("aria-pressed", "true");
-      }
-    });
-    playlistPicker.appendChild(chip);
-  });
-}
-
 function renderScenario(s) {
   const card = document.createElement("article");
   card.className = "scenario-card";
@@ -220,16 +173,6 @@ function renderScenario(s) {
     }
   });
 
-  const overrideLabel = document.createElement("label");
-  overrideLabel.textContent = "Prompt override";
-  card.appendChild(overrideLabel);
-
-  const promptInput = document.createElement("input");
-  promptInput.type = "text";
-  promptInput.className = "prompt-input";
-  promptInput.placeholder = drivePrompt || "Optional prompt override";
-  card.appendChild(promptInput);
-
   const actions = document.createElement("div");
   actions.className = "actions";
   const playButton = document.createElement("button");
@@ -250,13 +193,12 @@ function renderScenario(s) {
   card.appendChild(actions);
 
   playButton.addEventListener("click", () => {
-    const promptOverride = promptInput.value.trim();
     const params = new URLSearchParams({
       id: s.id,
-      ...(promptOverride ? { prompt: promptOverride } : {}),
+      no_drive: "true",
       ...Object.fromEntries(new URLSearchParams(csrfQuery())),
     });
-    appendLog(`Starting play stream for ${s.id}`);
+    appendLog(`Starting setup-only play stream for ${s.id}`);
     openStream(`/api/play/stream?${params.toString()}`);
   });
 
@@ -294,17 +236,9 @@ async function refreshScenarios() {
     registryErrors.innerHTML = "";
     visibleScenarios = data.scenarios || [];
 
-    const visibleIds = new Set(visibleScenarios.map((scenario) => scenario.id));
-    for (const selectedId of [...selectedPlaylistIds]) {
-      if (!visibleIds.has(selectedId)) {
-        selectedPlaylistIds.delete(selectedId);
-      }
-    }
-
     visibleScenarios.forEach((scenario) => {
       scenarioList.appendChild(renderScenario(scenario));
     });
-    renderPlaylistComposer();
     if ((data.errors || []).length) {
       registryErrors.textContent = data.errors
         .map((e) => `${e.folder}: ${e.error}`)
@@ -352,24 +286,6 @@ document.addEventListener("keydown", (event) => {
 
 document.getElementById("clear-log-btn").addEventListener("click", () => {
   logPane.textContent = "";
-});
-
-document.getElementById("playlist-form").addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const budgetRaw = document.getElementById("playlist-budget").value.trim();
-  const budget = budgetRaw ? parseInt(budgetRaw, 10) : null;
-  if (!selectedPlaylistIds.size) {
-    appendLog("Select at least one scenario to compose a playlist.");
-    return;
-  }
-
-  try {
-    const out = await apiPost("/api/playlist", { ids: [...selectedPlaylistIds], budget });
-    playlistOutput.textContent = JSON.stringify(out, null, 2);
-    appendLog(`Composed playlist with ${out.count} scenario(s).`);
-  } catch (err) {
-    appendLog(`ERROR composing playlist: ${err.message}`);
-  }
 });
 
 document.getElementById("verify-form").addEventListener("submit", (event) => {

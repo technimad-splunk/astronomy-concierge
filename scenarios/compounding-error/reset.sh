@@ -9,11 +9,7 @@
 #   bash scenarios/compounding-error/reset.sh
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-
-echo "compounding-error/reset: clearing any residual agent overlay state..."
-rm -f "${REPO_ROOT}/agent/_overlay/tool_faults.json" 2>/dev/null || true
+echo "compounding-error/reset: trigger-level API reset is authoritative..."
 
 echo "compounding-error/reset: done — baseline restored."
 echo "  The control-plane trigger reset already restored the flagd paymentFailure"

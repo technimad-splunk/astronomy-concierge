@@ -22,7 +22,7 @@ induces a fault and reveals the contrast:
 
 | # | Vignette | Punchline | Galileo hero moment |
 |---|---|---|---|
-| 1 | **The Invisible Failure** | APM stays green; the agent's answer is wrong | Context Adherence drops; ungrounded claim pinpointed |
+| 1 | **The Invisible Failure** | Infra stays green via stale cache hit; answer quality degrades | Context Adherence drops; ungrounded claim pinpointed |
 | 2 | **The Compounding Error** | One flaky payment cascades into retries and wasted tokens | Graph Engine cascade; Tool Selection Quality drop |
 | 3 | **The Firewall** | PII smuggled via a poisoned review; infra sees nothing | PII guardrail fires on the poisoned content |
 | 4 | **Trust the Judge** | 1 in 3 evals from a naive LLM-judge are wrong | Luna-2 / consensus evaluators agree with ground truth |
@@ -64,6 +64,8 @@ Set `MODEL_PROVIDER` in `.env`:
 # 1. Clone and configure
 git clone <repo-url> && cd astronomy-concierge
 cp .env.example .env          # Fill in all tokens (GALILEO_*, SPLUNK_*, model provider)
+# CONCIERGE_ADMIN_TOKEN is auto-generated and saved to .env on first
+# `scripts/stage-up.sh` (trust-on-first-use) — no manual step needed.
 
 # 2. Verify connectivity (optional but recommended)
 scripts/check-connectivity.sh
@@ -125,8 +127,8 @@ The CLI is a supported fallback for automation or terminal-first workflows:
 
 ```sh
 scripts/control-plane.sh list                           # discover all scenarios
-scripts/control-plane.sh play  <scenario-id>            # apply trigger + (optionally) drive the agent
-scripts/control-plane.sh play  <scenario-id> --prompt "..."  # apply trigger + drive with specific prompt
+scripts/control-plane.sh play  <scenario-id>            # apply trigger (agent-side triggers: drive via concierge web chat)
+scripts/control-plane.sh play  <scenario-id> --prompt "..."  # apply trigger; prints drive prompt guidance
 scripts/control-plane.sh reset <scenario-id>            # restore baseline
 scripts/control-plane.sh verify <scenario-id>           # auto-verify expected_signals
 ```
@@ -135,8 +137,9 @@ scripts/control-plane.sh verify <scenario-id>           # auto-verify expected_s
 
 1. **Pre-warm** dashboards (see below).
 2. **Play** the scenario (via UI button or CLI).
-3. **Drive** the concierge with the known-good prompt (paste it into the
-   concierge chat at http://localhost:8090/ or use `--prompt` on the CLI).
+3. **Drive** the concierge with the known-good prompt in the concierge web chat
+   at http://localhost:8090/ (for agent-side triggers, this is the only driving
+   path; the control-plane applies setup only).
 4. Wait 15–30 seconds for telemetry ingestion.
 5. **Reveal**: show Splunk first (the backdrop), then Galileo (the hero).
 6. Deliver the **punchline**.
@@ -209,9 +212,10 @@ Each vignette has its own reset:
 scripts/control-plane.sh reset <scenario-id>
 ```
 
-This restores the trigger (flag off, overlay cleared) and cleans up any
-scenario-specific agent overlay state. The agent's next conversation runs at
-baseline.
+This restores the trigger state through the authoritative trigger reset path
+(`feature_flag` via flagd; `tool_fault`/`prompt_overlay`/`rag_corpus` via
+authenticated concierge admin API reset + session reload). The agent's next
+conversation runs at baseline.
 
 ### Full teardown
 
@@ -261,7 +265,7 @@ fine for V1, V3, V4 but may struggle with V2's multi-step tool chain.
 
 | Vignette | Scenario ID | Trigger | Splunk shows | Galileo hero |
 |---|---|---|---|---|
-| V1: The Invisible Failure | `invisible-failure` | `feature_flag` → `productCatalogFailure` | APM stays green | Context Adherence low; ungrounded claim |
+| V1: The Invisible Failure | `invisible-failure` | `tool_fault` → `get_product_details` (`stale` snapshot) | All green (cache hit; no backend calls) | Context Adherence low; ungrounded claim |
 | V2: The Compounding Error | `compounding-error` | `feature_flag` → `paymentFailure` | Payment service errors/latency spike | Tool Selection Quality low; cascade in Graph Engine |
 | V3: The Firewall | `firewall` | `prompt_overlay` → poisoned review | APM normal (HTTP 200) | PII detected in conversation |
 | V4: Trust the Judge | `trust-the-judge` | `prompt_overlay` → eval-driver | N/A (eval layer) | Context Adherence low on incorrect eval cases |
