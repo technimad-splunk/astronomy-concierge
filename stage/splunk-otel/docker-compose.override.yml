@@ -53,6 +53,13 @@ services:
     environment:
       - SPLUNK_ACCESS_TOKEN=${SPLUNK_ACCESS_TOKEN}
       - SPLUNK_REALM=${SPLUNK_REALM}
+      # Keep Go heap aligned with the raised container memory limit so the
+      # collector can absorb larger OTLP trace payloads without OOM pressure.
+      - GOMEMLIMIT=256MiB
+    deploy:
+      resources:
+        limits:
+          memory: 320M
 
   concierge-web:
     build:
@@ -83,5 +90,13 @@ services:
       - WEB_ALLOWED_ORIGIN=${WEB_ALLOWED_ORIGIN:-http://localhost:8080}
       - CONCIERGE_API_URL=${CONCIERGE_API_URL:-http://localhost:8090}
       - CONCIERGE_ADMIN_TOKEN=${CONCIERGE_ADMIN_TOKEN}
+      - CONCIERGE_TURN_RECURSION_LIMIT=${CONCIERGE_TURN_RECURSION_LIMIT:-18}
+      - CONCIERGE_TURN_TIMEOUT_SECONDS=${CONCIERGE_TURN_TIMEOUT_SECONDS:-120}
+      - CONCIERGE_STREAM_PROGRESS_INTERVAL_SECONDS=${CONCIERGE_STREAM_PROGRESS_INTERVAL_SECONDS:-5}
+      # Reduce OTLP export payload size to avoid oversize gRPC messages when
+      # long LangGraph loops serialize large span attributes.
+      - OTEL_BSP_MAX_EXPORT_BATCH_SIZE=64
+      - OTEL_BSP_MAX_QUEUE_SIZE=512
+      - OTEL_BSP_SCHEDULE_DELAY=1000
     ports:
       - "${CONCIERGE_WEB_PORT:-8090}:8090"
