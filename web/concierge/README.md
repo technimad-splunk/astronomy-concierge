@@ -3,23 +3,23 @@
 This directory contains the standalone, co-located **Astronomy Concierge** web app and
 the FastAPI service that wraps the existing `agent/` core.
 
-## Galileo multi-session concurrency spike (Phase 7.1 risk)
+## Galileo multi-session concurrency handling
 
 ### Finding
 
-- `agent.telemetry.setup_telemetry()` (callback mode) builds a single shared `GalileoLogger`
-  and callback list per process.
-- `Telemetry.start_session(session_id)` mutates that shared logger's active session context.
-- In a long-lived web process, two simultaneous requests calling `start_session(...)` against
-  one shared logger can race and cross-label Galileo session traces.
+- `agent.telemetry.setup_telemetry()` still creates one startup logger to resolve Galileo project/log-stream IDs.
+- `ConciergeSessionManager` now creates a per-conversation `GalileoLogger` using those resolved IDs
+  (`project_id` and `log_stream_id`), starts the session once on creation, and keeps callbacks scoped
+  to that conversation only.
+- Each session logger is flushed on every turn, then flushed/concluded/terminated on reload/shutdown
+  so per-conversation `atexit` handlers do not accumulate.
 
 ### Chosen safe approach
 
-- **Serialized request execution only when Galileo callback mode is active**:
-  - `ConciergeSessionManager` uses a global async lock around graph execution if
-    `telemetry.status.galileo_mode == "callback"`.
-  - In OTLP mode (`GALILEO_OTEL_EXPORT=1`) the lock is not applied, so requests can run concurrently.
-- This avoids cross-session trace contamination without changing `agent/telemetry.py`.
+- **Per-conversation callback loggers, no global Galileo lock**:
+  - `ConciergeSessionManager` keeps the per-conversation `session.lock` (one in-flight turn per conversation).
+  - Distinct conversations can run concurrently because callback logger state is no longer shared.
+  - A bounded process-wide semaphore (`CONCIERGE_MAX_CONCURRENT_TURNS`, default `4`) caps concurrent graph executions.
 
 ## Service behavior
 
@@ -29,9 +29,14 @@ the FastAPI service that wraps the existing `agent/` core.
   - One `StoreClient` and one `build_concierge(...)` graph per conversation.
 - Every turn executes inside `using_session(session_id)`.
 - Each turn creates a wrapper span with `gen_ai.conversation.id=<conversation_id>`.
+- Turns are now explicitly bounded:
+  - `CONCIERGE_TURN_RECURSION_LIMIT` (default `18`) is passed as LangGraph `recursion_limit`.
+  - `CONCIERGE_TURN_TIMEOUT_SECONDS` (default `120`) bounds one turn's wall-clock runtime.
+  - `CONCIERGE_STREAM_PROGRESS_INTERVAL_SECONDS` (default `5`) controls SSE progress heartbeat cadence.
+  - Recursion-limit exhaustion is surfaced as a user-safe fallback reply (not a raw error) and tagged as a truncated turn outcome in trace data.
 - Endpoints:
   - `POST /chat` — one turn in, one reply out.
-  - `GET /chat/stream` — SSE token stream (`conversation`, `token`, `done`, `error` events).
+  - `GET /chat/stream` — SSE stream (`conversation`, `progress`, `token`, `done`, `error` events).
   - `POST /admin/reload` — admin reset; auth-required when `CONCIERGE_ADMIN_TOKEN` is set.
   - `POST /admin/scenario/apply` — apply `tool_fault`, `prompt_overlay`, or `rag_corpus`
     state to in-memory overlay storage and reload sessions.
@@ -79,6 +84,7 @@ the FastAPI service that wraps the existing `agent/` core.
 7. Open `http://localhost:${CONCIERGE_WEB_PORT}` and run a multi-turn chat.
 8. Verify `POST /chat` works with `curl` and returns stable `conversation_id`/`session_id`.
 9. Verify `GET /chat/stream` emits `token` events and final `done` payload.
+   For long turns, verify periodic `progress` events arrive before `done`.
 10. Run two concurrent chats and confirm Galileo traces remain session-isolated.
 11. Apply a `rag_corpus` / `prompt_overlay` / `tool_fault` trigger via `/admin/scenario/apply`,
     start a **new** conversation, and verify behavior changes.

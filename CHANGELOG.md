@@ -11,11 +11,27 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Intent:** Restore Splunk GenAI translator compatibility by preventing concierge image rebuilds from floating OpenTelemetry past the removal of `opentelemetry._events`.
+  **Rationale:** `splunk-otel-util-genai` currently imports the deprecated Events API that was removed in OTel 1.44.0, so unbounded upgrades broke translator initialization and produced startup `.pth` import tracebacks.
+  **Impact:** `pyproject.toml` now bounds OTel core/instrumentation ranges below the breaking versions, a tracked `constraints.txt` pins the concierge runtime to `opentelemetry-{api,sdk,exporter-otlp}==1.43.0` and `opentelemetry-{instrumentation,semantic-conventions}==0.64b0`, and `web/concierge/Dockerfile` installs with that constraints file for reproducible rebuilds.
+
+- **Intent:** Remove callback-mode global turn serialization in the concierge web service while keeping Galileo trace isolation.
+  **Rationale:** Galileo 2.6.0 logger instances are context-isolated and can be created quickly from resolved IDs, so a process-wide lock was no longer necessary and caused user-visible chat queueing under concurrent turns.
+  **Impact:** `agent/telemetry.py` now exposes a per-session Galileo logger factory based on cached `project_id`/`log_stream_id`; `web/concierge/service.py` uses per-conversation callbacks/loggers, deletes the global Galileo lock path, adds a bounded concurrency semaphore (`CONCIERGE_MAX_CONCURRENT_TURNS`), and terminates per-session loggers on reload/shutdown. `web/concierge/app.py` now logs telemetry startup status and warns when the translator is disabled/failed.
+
 - **Intent:** Reconcile the subagent model-governance roster with the model slugs currently available in Cursor.
   **Rationale:** The rule's maintenance contract requires agents to keep the roster aligned with real tool availability so subagent runs do not silently fall back to defaults.
   **Impact:** `.cursor/rules/subagent-models.mdc` now lists only currently available slugs, updates assignment mappings to valid models (including `claude-opus-5-thinking-high` for deep review/security), refreshes examples, and updates the verification date to `2026-08-31`.
 
 ### Fixed
+
+- **Intent:** Stop concierge trace export drops without relying on a non-default collector gRPC receive limit.
+  **Rationale:** Live measurement showed the largest exported OTLP batch was `189,232` bytes across `8` spans (~23.6 KB/span), so reducing app-side batching from `512` to `64` spans shrank worst-case payloads to ~1.5 MB and removed the real `RESOURCE_EXHAUSTED` cause under the collector's default 4 MiB limit.
+  **Impact:** `stage/splunk-otel/docker-compose.override.yml` keeps the effective fix (`OTEL_BSP_MAX_EXPORT_BATCH_SIZE=64`, `OTEL_BSP_MAX_QUEUE_SIZE=512`, `OTEL_BSP_SCHEDULE_DELAY=1000`) and collector memory headroom (`deploy.resources.limits.memory=320M`, `GOMEMLIMIT=256MiB`), while `stage/splunk-otel/otelcol-config-extras.yml` removes the temporary `max_recv_msg_size_mib: 8` override and returns the receiver to the upstream 4 MiB default after validation.
+
+- **Intent:** Bound faulted LangGraph turns so `/chat/stream` never appears hung and recursion-limit truncation is diagnosable to operators.
+  **Rationale:** A stale tool-fault can cause repeated ReAct tool calls without reaching a user answer, and LangGraph may report recursion exhaustion either as an exception or as a fallback assistant message; both paths need a consistent user-visible and telemetry-visible outcome.
+  **Impact:** `web/concierge/service.py` now detects recursion-limit exhaustion in both forms (`GraphRecursionError` and the LangGraph sentinel `"Sorry, need more steps to process this request."`), returns a stable fallback reply, sets `concierge.turn.outcome=recursion_limit_exhausted`, and marks the turn as truncated. Faulted SSE probes now emit periodic `progress` events and complete with a coherent `done` payload in ~18s rather than running silently.
 
 - **Intent:** Make `invisible-failure` reliably drain Locust during Play without stopping the load-generator container.
   **Rationale:** The scenario did not opt into `quiet_background`, and `scripts/loadgen.sh` depended on in-container `curl` that is absent in the `load-generator` image, forcing an unintended container-stop fallback.

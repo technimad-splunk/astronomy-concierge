@@ -918,3 +918,64 @@ entry — there is no user-facing change yet. No application code or config touc
 - Preserved soft-failure exit-0 behavior when Docker, daemon, demo dir, or container context is absent, so play/reset remain safe no-ops on stage-down environments.
 
 **Effect on codebase / UX:** Reset now reports real observed Locust status (`state` + `user_count`) and restores traffic repeatably across consecutive quiet/restore cycles; troubleshooting docs now key on `state=spawning, user_count=0` and direct operators to a verified restore path.
+
+---
+
+## 2026-08-31 — Reversed global Galileo turn lock
+
+**What:** Replaced the concierge web process-wide Galileo lock with per-conversation callback loggers. The service now creates one `GalileoLogger` per conversation session (from cached Galileo IDs), uses session-scoped callbacks, and flushes/concludes/terminates those loggers on reload/shutdown.
+
+**Why:** This explicitly reverses the 2026-06-19 Phase-7.1 mitigation that serialized all callback-mode turns behind a global async lock. Live verification established that Galileo 2.6.0 logger instances are context-isolated (`TracesLogger` per-instance `ContextVar`), and creating loggers by `project_id`/`log_stream_id` is effectively free versus name-based construction.
+
+**Decisions / trade-offs:**
+- Kept the startup/shared logger in `agent/telemetry.py` for CLI compatibility and for one-time ID resolution, while web sessions use isolated per-conversation loggers.
+- Added `CONCIERGE_MAX_CONCURRENT_TURNS` (default `4`) as a bounded semaphore around graph execution so concurrency is controlled without reintroducing global request serialization.
+- Added explicit session logger teardown (`flush`/`conclude`/`terminate`) to avoid `atexit` handler buildup from one logger per conversation.
+
+**Effect on codebase / UX:** Concurrent conversations no longer queue behind an unrelated in-flight turn solely because Galileo callback mode is enabled; the chat remains responsive under overlap while preserving per-session Galileo trace grouping.
+
+---
+
+## 2026-08-31 — Fix concierge OTLP/gRPC trace batch drops
+
+**What:** Implemented a tracked, reproducible mitigation for concierge trace export failures where OTLP/gRPC batches exceeded the collector's default 4 MiB receive limit and were dropped with `StatusCode.RESOURCE_EXHAUSTED`.
+
+**Why:** The dominant failure mode was oversized export payloads from the concierge's default `BatchSpanProcessor` settings (`max_export_batch_size=512`) interacting with large, content-rich LangGraph spans. Raising collector receive size alone was unsafe because the collector was already near its 200M memory cap (`GOMEMLIMIT=160MiB`), so receiver and memory tuning needed to move together while also reducing app-side batch bytes.
+
+**Decisions / trade-offs:**
+- Raised collector OTLP/gRPC receive cap modestly to `max_recv_msg_size_mib: 8` (not 16+) to avoid over-buffering on a constrained collector while still tolerating occasional larger payloads.
+- Raised collector memory headroom in our compose override (`deploy.resources.limits.memory=320M`, `GOMEMLIMIT=256MiB`) so the new receiver ceiling does not increase OOM risk.
+- Reduced concierge export payload size using OTel SDK env vars in compose (no `agent/telemetry.py` edit to avoid concurrent-branch conflicts): `OTEL_BSP_MAX_EXPORT_BATCH_SIZE=64`, `OTEL_BSP_MAX_QUEUE_SIZE=512`, `OTEL_BSP_SCHEDULE_DELAY=1000`.
+- Kept GenAI content capture intact (no attribute truncation), because Splunk AI Agent Monitoring depends on parsable message content.
+
+**Effect on codebase / UX:** The stage wiring now contains explicit guardrails for large concierge trace bursts in tracked overrides only (`stage/splunk-otel/*`), with no edits to the gitignored vendored demo tree. This should stop `RESOURCE_EXHAUSTED` batch drops after the next stage restart while preserving Splunk AI pages' message parsing path.
+
+---
+
+## 2026-08-31 — Bounded faulted turns and measured OTLP batch size
+
+**What:** Reconciled an interrupted run, then completed the remaining loop-bound and observability work for the concierge web turn path. Added recursion-exhaustion detection for both LangGraph failure shapes and captured an explicit OTLP trace export batch-size measurement during a faulted multi-step turn.
+
+**Why:** A faulted invisible-failure turn had previously run for hundreds of seconds with no user-visible stream output. We needed deterministic turn termination, clear stream activity signals, and concrete byte-level evidence that the collector's 8 MiB gRPC receive limit has real headroom.
+
+**Decisions / trade-offs:**
+- Kept the existing env defaults (`CONCIERGE_TURN_RECURSION_LIMIT=18`, `CONCIERGE_TURN_TIMEOUT_SECONDS=120`, `CONCIERGE_STREAM_PROGRESS_INTERVAL_SECONDS=5`) because the fault probe hit truncation at ~18s while a normal product-price turn still completes quickly; 120s avoids breaking the previously observed ~55s baseline turns.
+- Normalized recursion-limit handling by treating both `GraphRecursionError` and LangGraph's sentinel reply (`"Sorry, need more steps to process this request."`) as the same truncated outcome with a user-safe fallback response.
+- Measured OTLP request sizes by temporarily monkeypatching `OTLPSpanExporter._translate_data` inside the running `concierge-web` container during one bounded faulted turn; no tracked instrumentation files were added.
+
+**Effect on codebase / UX:** Faulted `/chat/stream` turns now emit periodic `progress` events and end with a coherent fallback reply plus `done` payload instead of appearing dead. Largest measured OTLP trace export batch was `189,232` bytes (8 spans), leaving ~8.20 MB headroom under `max_recv_msg_size_mib: 8`; no new `RESOURCE_EXHAUSTED` receiver errors were observed during probes.
+
+---
+
+## 2026-08-31 — Correction: app-side batching fixed OTLP drops
+
+**What:** Corrected the same-day OTLP drop framing from the earlier "Fix concierge OTLP/gRPC trace batch drops" entry. Reverted the temporary collector receive-limit override (`max_recv_msg_size_mib: 8`) and kept the app-side BatchSpanProcessor tuning as the effective fix.
+
+**Why:** Follow-up measurement showed the largest exported OTLP batch was `189,232` bytes across `8` spans (~23.6 KB/span). With `OTEL_BSP_MAX_EXPORT_BATCH_SIZE=64`, worst-case batch size is ~1.5 MB, which is safely below the collector's default 4 MiB gRPC receive limit. The earlier `RESOURCE_EXHAUSTED` condition aligned with prior 512-span batching (~12 MB worst case; one observed batch was ~15.9 MB), not with the default receiver cap itself.
+
+**Decisions / trade-offs:**
+- Kept collector memory guardrails (`deploy.resources.limits.memory=320M`, `GOMEMLIMIT=256MiB`) because they improve resilience independently of receive-limit tuning.
+- Kept concierge batching env settings (`OTEL_BSP_MAX_EXPORT_BATCH_SIZE=64`, `OTEL_BSP_MAX_QUEUE_SIZE=512`, `OTEL_BSP_SCHEDULE_DELAY=1000`) as the primary payload-size control.
+- Removed `receivers.otlp.protocols.grpc.max_recv_msg_size_mib: 8` so the collector returns to the upstream 4 MiB default and avoids unnecessary deviation.
+
+**Effect on codebase / UX:** Documentation and config now reflect the validated root cause and fix: app-side export batching resolved trace-drop risk, while the collector receive-limit bump was an unnecessary temporary mitigation and has been reverted.

@@ -23,4 +23,6 @@ This file is the entry point for any agent (or human) wanting to understand how 
 - **Before starting**: read the relevant rule file(s) for the work you are about to do.
 - **While working**: follow the branching and commit conventions in `git-hygiene.mdc`.
 - **After finishing**: update `README.md` if user-facing behaviour changed, add a `CHANGELOG.md` entry, and append an entry to `docs/agent-journal.md`.
-- **Never**: skip verification, force-push to `main`, hardcode secrets, or leave the project in a broken state.
+- **Never**: skip verification (it is ok to ask for human verification, do provide clear instructions and expectations), force-push to `main`, hardcode secrets, or leave the project in a broken state.
+
+
