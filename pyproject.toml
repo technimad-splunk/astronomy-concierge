@@ -48,8 +48,14 @@ dependencies = [
     "openinference-instrumentation-langchain>=0.1.66",
     # SDK provides the TracerProvider + MeterProvider; the OTLP meta-package pulls
     # the gRPC span AND metric exporters used to reach the local Splunk collector.
-    "opentelemetry-sdk>=1.42",
-    "opentelemetry-exporter-otlp>=1.42",
+    # Keep OTel core below 1.44.0 until splunk-otel-util-genai stops importing
+    # the removed opentelemetry._events API.
+    "opentelemetry-sdk>=1.42,<1.44",
+    "opentelemetry-exporter-otlp>=1.42,<1.44",
+    "opentelemetry-api>=1.42,<1.44",
+    # Keep instrumentation/semconv below 0.65b0 to stay aligned with OTel 1.43.x.
+    "opentelemetry-instrumentation>=0.63b1,<0.65b0",
+    "opentelemetry-semantic-conventions>=0.63b1,<0.65b0",
     # Store API tool calls (frontend-proxy HTTP) + config/secrets loading.
     "httpx>=0.27",
     "python-dotenv>=1.0",

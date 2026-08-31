@@ -13,14 +13,14 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-COPY pyproject.toml README.md ./
+COPY pyproject.toml README.md constraints.txt ./
 COPY agent ./agent
 COPY control_plane ./control_plane
 COPY scripts ./scripts
 COPY web ./web
 
 RUN pip install --no-cache-dir --upgrade pip \
-    && pip install --no-cache-dir -e .
+    && pip install --no-cache-dir -c constraints.txt -e .
 
 COPY --from=frontend-build /workspace/web/concierge/frontend/dist /app/web/concierge/frontend/dist
 
