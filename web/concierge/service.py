@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import time
 import uuid
 from dataclasses import dataclass, field
 from queue import Empty, Queue
@@ -11,14 +13,18 @@ from typing import Any, AsyncGenerator
 
 from langchain_core.callbacks.base import BaseCallbackHandler
 from langchain_core.messages import AIMessage, HumanMessage
+from langgraph.errors import GraphRecursionError
 from openinference.instrumentation import using_session
 from opentelemetry import trace as trace_api
+from opentelemetry.trace import Status, StatusCode
 
 from agent import overlay
 from agent import rag
 from agent.graph import build_concierge
 from agent.store_client import StoreClient
 from agent.telemetry import Telemetry
+
+_RECURSION_SENTINEL_REPLY = "Sorry, need more steps to process this request."
 
 
 class TokenQueueCallback(BaseCallbackHandler):
@@ -38,6 +44,9 @@ class TurnResult:
     session_id: str
     reply: str
     cart_mutated: bool = False
+    history: list[Any] | None = None
+    outcome: str = "ok"
+    truncated: bool = False
 
 
 @dataclass
@@ -46,8 +55,42 @@ class ConciergeSession:
     session_id: str
     store: StoreClient
     agent: Any
+    galileo_logger: Any = None
+    callbacks: list[Any] = field(default_factory=list)
     history: list[Any] = field(default_factory=list)
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+
+
+def _max_concurrent_turns() -> int:
+    raw = os.getenv("CONCIERGE_MAX_CONCURRENT_TURNS", "4").strip()
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return 4
+
+
+def _turn_recursion_limit() -> int:
+    raw = os.getenv("CONCIERGE_TURN_RECURSION_LIMIT", "18").strip()
+    try:
+        return max(4, int(raw))
+    except ValueError:
+        return 18
+
+
+def _turn_timeout_seconds() -> float:
+    raw = os.getenv("CONCIERGE_TURN_TIMEOUT_SECONDS", "120").strip()
+    try:
+        return max(10.0, float(raw))
+    except ValueError:
+        return 120.0
+
+
+def _stream_progress_interval_seconds() -> float:
+    raw = os.getenv("CONCIERGE_STREAM_PROGRESS_INTERVAL_SECONDS", "5").strip()
+    try:
+        return max(1.0, float(raw))
+    except ValueError:
+        return 5.0
 
 
 class ConciergeSessionManager:
@@ -57,7 +100,10 @@ class ConciergeSessionManager:
         self._telemetry = telemetry
         self._sessions: dict[str, ConciergeSession] = {}
         self._sessions_lock = asyncio.Lock()
-        self._galileo_lock = asyncio.Lock()
+        self._turn_semaphore = asyncio.BoundedSemaphore(_max_concurrent_turns())
+        self._turn_recursion_limit = _turn_recursion_limit()
+        self._turn_timeout_s = _turn_timeout_seconds()
+        self._stream_progress_interval_s = _stream_progress_interval_seconds()
         self._activity_lock = asyncio.Lock()
         self._idle = asyncio.Event()
         self._idle.set()
@@ -66,14 +112,6 @@ class ConciergeSessionManager:
         self._tracer = trace_api.get_tracer("web.concierge")
         self._prompt_overlay_docs: dict[str, str] = {}
         self._rag_overlay_docs: dict[str, str] = {}
-
-    @property
-    def galileo_is_serialized(self) -> bool:
-        """True when shared Galileo callback mode requires request serialization."""
-        return (
-            self._telemetry.status.galileo_mode == "callback"
-            and bool(self._telemetry.callbacks)
-        )
 
     async def _begin_turn(self) -> None:
         async with self._activity_lock:
@@ -105,11 +143,14 @@ class ConciergeSessionManager:
         except Exception:
             store.close()
             raise
+        galileo_logger, callbacks = self._telemetry.new_galileo_session(session_id)
         return ConciergeSession(
             conversation_id=conversation_id,
             session_id=session_id,
             store=store,
             agent=agent,
+            galileo_logger=galileo_logger,
+            callbacks=callbacks,
         )
 
     async def get_or_create_session(
@@ -142,6 +183,35 @@ class ConciergeSessionManager:
                 return msg.content.strip()
         return "(no text reply)"
 
+    @staticmethod
+    def _is_recursion_sentinel_reply(reply: str) -> bool:
+        return reply.strip() == _RECURSION_SENTINEL_REPLY
+
+    def _recursion_limit_turn(
+        self,
+        session: ConciergeSession,
+        history: list[Any],
+        span: Any,
+        exc: Exception | None = None,
+    ) -> TurnResult:
+        reply = (
+            "I could not safely complete that request because I hit my "
+            "reasoning-step limit. Please rephrase or narrow the ask and try again."
+        )
+        fallback_history = [*history, AIMessage(content=reply)]
+        span.set_status(Status(StatusCode.ERROR, "recursion limit exhausted"))
+        span.set_attribute("concierge.turn.outcome", "recursion_limit_exhausted")
+        if exc is not None:
+            span.record_exception(exc)
+        return TurnResult(
+            conversation_id=session.conversation_id,
+            session_id=session.session_id,
+            reply=reply,
+            history=fallback_history,
+            outcome="recursion_limit_exhausted",
+            truncated=True,
+        )
+
     def _invoke_graph(
         self,
         session: ConciergeSession,
@@ -149,15 +219,12 @@ class ConciergeSessionManager:
         extra_callbacks: list[Any] | None = None,
     ) -> TurnResult:
         history = [*session.history, HumanMessage(content=user_text)]
-        callbacks = [*self._telemetry.callbacks]
+        callbacks = [*session.callbacks]
         if extra_callbacks:
             callbacks.extend(extra_callbacks)
-        config = {"callbacks": callbacks} if callbacks else {}
-
-        # In callback mode the Galileo logger stores mutable process-global session
-        # state. The caller serializes invocations while this mode is active.
-        if self._telemetry.status.galileo_mode == "callback":
-            self._telemetry.start_session(session.session_id)
+        config: dict[str, Any] = {"recursion_limit": self._turn_recursion_limit}
+        if callbacks:
+            config["callbacks"] = callbacks
 
         cart_mutation_before = session.store.cart_mutation_version
         try:
@@ -167,23 +234,101 @@ class ConciergeSessionManager:
                     attributes={
                         "gen_ai.conversation.id": session.conversation_id,
                         "concierge.session.id": session.session_id,
+                        "concierge.turn.recursion_limit": self._turn_recursion_limit,
                     },
-                ):
-                    result = session.agent.invoke({"messages": history}, config=config)
+                ) as span:
+                    try:
+                        result = session.agent.invoke({"messages": history}, config=config)
+                    except GraphRecursionError as exc:
+                        return self._recursion_limit_turn(session, history, span, exc)
+                    reply = self._extract_reply(result)
+                    if self._is_recursion_sentinel_reply(reply):
+                        return self._recursion_limit_turn(session, history, span)
+                    span.set_attribute("concierge.turn.outcome", "ok")
 
-            session.history[:] = result.get("messages", history)
             cart_mutated = session.store.cart_mutation_version > cart_mutation_before
             return TurnResult(
                 conversation_id=session.conversation_id,
                 session_id=session.session_id,
-                reply=self._extract_reply(result),
+                reply=reply,
                 cart_mutated=cart_mutated,
+                history=result.get("messages", history),
             )
         finally:
-            # In callback mode Galileo buffers traces in-process; flush each turn so
-            # long-lived web workers upload interactions immediately.
-            if self._telemetry.status.galileo_mode == "callback":
-                self._telemetry.flush_galileo()
+            # Each session uses its own callback logger; flush after every turn for
+            # immediate upload in long-lived web workers.
+            logger = session.galileo_logger
+            if logger is not None:
+                try:
+                    logger.flush()
+                except Exception:
+                    pass
+
+    async def _invoke_graph_threaded(
+        self,
+        session: ConciergeSession,
+        message: str,
+        extra_callbacks: list[Any] | None = None,
+    ) -> TurnResult:
+        async with self._turn_semaphore:
+            return await asyncio.to_thread(
+                self._invoke_graph, session, message, extra_callbacks
+            )
+
+    @staticmethod
+    def _commit_turn_history(session: ConciergeSession, turn: TurnResult) -> None:
+        if turn.history is not None:
+            session.history[:] = turn.history
+
+    def _timeout_turn(self, session: ConciergeSession, user_text: str) -> TurnResult:
+        timeout_s = int(self._turn_timeout_s)
+        reply = (
+            f"I'm still working, but this turn timed out after about {timeout_s} seconds. "
+            "Please try a narrower request."
+        )
+        history = [*session.history, HumanMessage(content=user_text), AIMessage(content=reply)]
+        with using_session(session.session_id):
+            with self._tracer.start_as_current_span(
+                "concierge.chat.turn",
+                attributes={
+                    "gen_ai.conversation.id": session.conversation_id,
+                    "concierge.session.id": session.session_id,
+                    "concierge.turn.recursion_limit": self._turn_recursion_limit,
+                    "concierge.turn.timeout_seconds": self._turn_timeout_s,
+                    "concierge.turn.outcome": "timeout",
+                },
+            ) as span:
+                span.set_status(Status(StatusCode.ERROR, "turn timeout"))
+        return TurnResult(
+            conversation_id=session.conversation_id,
+            session_id=session.session_id,
+            reply=reply,
+            history=history,
+            outcome="timeout",
+            truncated=True,
+        )
+
+    @staticmethod
+    def _close_session_telemetry(session: ConciergeSession) -> None:
+        logger = session.galileo_logger
+        if logger is None:
+            return
+        try:
+            logger.flush()
+        except Exception:
+            pass
+        conclude_fn = getattr(logger, "conclude", None)
+        if callable(conclude_fn):
+            try:
+                conclude_fn()
+            except Exception:
+                pass
+        terminate_fn = getattr(logger, "terminate", None)
+        if callable(terminate_fn):
+            try:
+                terminate_fn()
+            except Exception:
+                pass
 
     async def run_turn(
         self,
@@ -195,12 +340,15 @@ class ConciergeSessionManager:
         await self._begin_turn()
         try:
             async with session.lock:
-                if self.galileo_is_serialized:
-                    async with self._galileo_lock:
-                        return await asyncio.to_thread(
-                            self._invoke_graph, session, message
-                        )
-                return await asyncio.to_thread(self._invoke_graph, session, message)
+                try:
+                    turn = await asyncio.wait_for(
+                        self._invoke_graph_threaded(session, message),
+                        timeout=self._turn_timeout_s,
+                    )
+                except asyncio.TimeoutError:
+                    turn = self._timeout_turn(session, message)
+                self._commit_turn_history(session, turn)
+                return turn
         finally:
             await self._end_turn()
 
@@ -209,28 +357,58 @@ class ConciergeSessionManager:
     ) -> AsyncGenerator[dict[str, str], None]:
         token_queue: Queue[str] = Queue()
         token_callback = TokenQueueCallback(token_queue)
-        loop = asyncio.get_running_loop()
-        future = loop.run_in_executor(
-            None,
-            self._invoke_graph,
-            session,
-            message,
-            [token_callback],
+        future = asyncio.create_task(
+            self._invoke_graph_threaded(session, message, [token_callback])
         )
 
         streamed_tokens: list[str] = []
+        started = time.monotonic()
+        next_progress = started + self._stream_progress_interval_s
         while True:
             if future.done() and token_queue.empty():
                 break
             try:
                 token = token_queue.get_nowait()
             except Empty:
+                now = time.monotonic()
+                if now >= next_progress:
+                    elapsed_s = int(now - started)
+                    yield {
+                        "event": "progress",
+                        "data": json.dumps(
+                            {
+                                "status": "working",
+                                "elapsed_seconds": elapsed_s,
+                                "message": f"Still working... ({elapsed_s}s)",
+                            }
+                        ),
+                    }
+                    next_progress = now + self._stream_progress_interval_s
+                if (now - started) >= self._turn_timeout_s:
+                    future.cancel()
+                    turn = self._timeout_turn(session, message)
+                    self._commit_turn_history(session, turn)
+                    yield {
+                        "event": "done",
+                        "data": json.dumps(
+                            {
+                                "conversation_id": turn.conversation_id,
+                                "session_id": turn.session_id,
+                                "reply": turn.reply,
+                                "cart_mutated": False,
+                                "outcome": turn.outcome,
+                                "truncated": turn.truncated,
+                            }
+                        ),
+                    }
+                    return
                 await asyncio.sleep(0.02)
                 continue
             streamed_tokens.append(token)
             yield {"event": "token", "data": json.dumps({"token": token})}
 
         turn = await future
+        self._commit_turn_history(session, turn)
         if turn.reply and not streamed_tokens:
             yield {"event": "token", "data": json.dumps({"token": turn.reply})}
         yield {
@@ -241,6 +419,8 @@ class ConciergeSessionManager:
                     "session_id": turn.session_id,
                     "reply": turn.reply,
                     "cart_mutated": turn.cart_mutated,
+                    "outcome": turn.outcome,
+                    "truncated": turn.truncated,
                 }
             ),
         }
@@ -264,13 +444,8 @@ class ConciergeSessionManager:
                 ),
             }
             async with session.lock:
-                if self.galileo_is_serialized:
-                    async with self._galileo_lock:
-                        async for event in self._stream_locked_turn(session, message):
-                            yield event
-                else:
-                    async for event in self._stream_locked_turn(session, message):
-                        yield event
+                async for event in self._stream_locked_turn(session, message):
+                    yield event
         finally:
             await self._end_turn()
 
@@ -278,17 +453,12 @@ class ConciergeSessionManager:
         """Drop all in-memory sessions and force next turn to rebuild from overlay."""
         if wait_for_idle:
             await self._idle.wait()
-        if self._telemetry.status.galileo_mode == "callback" and wait_for_idle:
-            if self.galileo_is_serialized:
-                async with self._galileo_lock:
-                    await asyncio.to_thread(self._telemetry.flush_galileo, True)
-            else:
-                await asyncio.to_thread(self._telemetry.flush_galileo, True)
         rag.clear_corpus_cache()
         async with self._sessions_lock:
             sessions = list(self._sessions.values())
             self._sessions.clear()
         for session in sessions:
+            self._close_session_telemetry(session)
             session.store.close()
         return len(sessions)
 
@@ -359,11 +529,5 @@ class ConciergeSessionManager:
         except asyncio.TimeoutError:
             pass
 
-        if self._telemetry.status.galileo_mode == "callback":
-            if self._idle.is_set() and self.galileo_is_serialized:
-                async with self._galileo_lock:
-                    await asyncio.to_thread(self._telemetry.flush_galileo, True)
-            else:
-                await asyncio.to_thread(self._telemetry.flush_galileo, True)
         await self.reload(wait_for_idle=False)
         self._telemetry.shutdown()

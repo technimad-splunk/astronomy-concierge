@@ -89,6 +89,7 @@ function App() {
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState([]);
   const [isStreaming, setIsStreaming] = useState(false);
+  const [progress, setProgress] = useState("");
   const [error, setError] = useState("");
   const chatWindowRef = useRef(null);
 
@@ -122,6 +123,7 @@ function App() {
       return;
     }
     setError("");
+    setProgress("");
     setInput("");
     const userId = crypto.randomUUID();
     const assistantId = crypto.randomUUID();
@@ -166,6 +168,11 @@ function App() {
       appendToken(assistantId, data.token || "");
     });
 
+    source.addEventListener("progress", (event) => {
+      const data = parseEventData(event.data, {});
+      setProgress(data.message || "Still working...");
+    });
+
     source.addEventListener("done", (event) => {
       const data = parseEventData(event.data, {});
       if (data.reply) {
@@ -184,6 +191,7 @@ function App() {
       if (data.cart_mutated === true) {
         notifyParentCartMutated();
       }
+      setProgress("");
       setIsStreaming(false);
       source.close();
     });
@@ -191,6 +199,7 @@ function App() {
     source.addEventListener("error", (event) => {
       const data = parseEventData(event.data, {});
       setError(data.detail || "Streaming request failed.");
+      setProgress("");
       setIsStreaming(false);
       source.close();
     });
@@ -271,6 +280,7 @@ function App() {
         )}
       </section>
 
+      {isStreaming && progress ? <p className="progress-banner">{progress}</p> : null}
       {error ? <p className="error-banner">{error}</p> : null}
 
       <form className="composer" onSubmit={onSubmit}>

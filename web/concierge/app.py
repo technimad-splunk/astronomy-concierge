@@ -203,6 +203,35 @@ async def _lifespan(app: FastAPI):
     # containerized collector/Galileo config is unaffected.
     load_dotenv(dotenv_path=_REPO_ROOT / ".env")
     telemetry = setup_telemetry()
+    level = logging.INFO if telemetry.status.translator_enabled else logging.WARNING
+    logging.getLogger("uvicorn.error").log(
+        level,
+        "telemetry startup status: translator_enabled=%s galileo_mode=%s "
+        "galileo_detail=%s instrumentation=%s",
+        telemetry.status.translator_enabled,
+        telemetry.status.galileo_mode,
+        telemetry.status.galileo_detail,
+        telemetry.status.instrumentation,
+    )
+    _LOGGER.log(
+        level,
+        "telemetry startup status",
+        extra={
+            "service_name": telemetry.status.service_name,
+            "deployment_environment": telemetry.status.deployment_environment,
+            "galileo_enabled": telemetry.status.galileo_enabled,
+            "galileo_mode": telemetry.status.galileo_mode,
+            "galileo_detail": telemetry.status.galileo_detail,
+            "splunk_enabled": telemetry.status.splunk_enabled,
+            "splunk_endpoint": telemetry.status.splunk_endpoint,
+            "splunk_detail": telemetry.status.splunk_detail,
+            "instrumentation": telemetry.status.instrumentation,
+            "translator_enabled": telemetry.status.translator_enabled,
+            "translator_detail": telemetry.status.translator_detail,
+            "metrics_enabled": telemetry.status.metrics_enabled,
+            "metrics_detail": telemetry.status.metrics_detail,
+        },
+    )
     app.state.manager = ConciergeSessionManager(telemetry)
     yield
     await app.state.manager.shutdown()

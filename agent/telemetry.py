@@ -44,6 +44,7 @@ No secrets are logged — only which backends were enabled and where.
 
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass, field
 from typing import Any
@@ -57,6 +58,7 @@ DEFAULT_SERVICE_NAME = "astronomy-concierge"
 DEFAULT_DEPLOYMENT_ENV = "local-agent-galileo"
 DEFAULT_OTLP_ENDPOINT = "http://localhost:4317"
 SERVICE_VERSION = "0.1.0"
+_LOGGER = logging.getLogger(__name__)
 
 _TRUE = {"1", "true", "True", "yes", "on"}
 
@@ -110,6 +112,8 @@ class Telemetry:
     _provider: TracerProvider
     _meter_provider: Any = None
     _galileo_logger: Any = None
+    _galileo_project_id: str | None = None
+    _galileo_log_stream_id: str | None = None
     callbacks: list = field(default_factory=list)
 
     def start_session(self, session_id: str) -> None:
@@ -140,6 +144,45 @@ class Telemetry:
                 except Exception:  # pragma: no cover
                     pass
 
+    def new_galileo_session(self, session_id: str) -> tuple[Any, list]:
+        """Create an isolated per-conversation Galileo callback logger.
+
+        In callback mode each conversation gets its own logger instance to avoid
+        cross-conversation serialization/crosstalk while preserving the shared
+        startup logger path used by the CLI.
+        """
+        if self.status.galileo_mode != "callback":
+            return None, []
+        if not self._galileo_project_id or not self._galileo_log_stream_id:
+            _LOGGER.warning(
+                "Galileo session logger unavailable for session_id=%s: missing "
+                "resolved IDs (project_id=%r, log_stream_id=%r); running without "
+                "Galileo callback for this session.",
+                session_id,
+                self._galileo_project_id,
+                self._galileo_log_stream_id,
+            )
+            return None, []
+        try:
+            from galileo import GalileoLogger
+            from galileo.handlers.langchain import GalileoCallback
+
+            logger = GalileoLogger(
+                project_id=self._galileo_project_id,
+                log_stream_id=self._galileo_log_stream_id,
+            )
+            callback = GalileoCallback(galileo_logger=logger, flush_on_chain_end=True)
+            logger.start_session(name=session_id, external_id=session_id)
+            return logger, [callback]
+        except Exception as exc:  # pragma: no cover - defensive
+            _LOGGER.warning(
+                "Galileo session logger creation failed for session_id=%s: %s; "
+                "running without Galileo callback for this session.",
+                session_id,
+                exc,
+            )
+            return None, []
+
     def flush(self) -> None:
         self.flush_galileo()
         try:
@@ -154,6 +197,12 @@ class Telemetry:
 
     def shutdown(self) -> None:
         self.flush()
+        terminate_fn = getattr(self._galileo_logger, "terminate", None)
+        if callable(terminate_fn):
+            try:
+                terminate_fn()
+            except Exception:  # pragma: no cover
+                pass
         try:
             self._provider.shutdown()
         except Exception:  # pragma: no cover
@@ -252,6 +301,8 @@ def setup_telemetry() -> Telemetry:
             pass
 
     galileo_logger = None
+    galileo_project_id: str | None = None
+    galileo_log_stream_id: str | None = None
     callbacks: list = []
     galileo_enabled = False
     galileo_mode = "off"
@@ -286,6 +337,8 @@ def setup_telemetry() -> Telemetry:
                     project=os.getenv("GALILEO_PROJECT"),
                     log_stream=os.getenv("GALILEO_LOG_STREAM"),
                 )
+                galileo_project_id = getattr(galileo_logger, "project_id", None)
+                galileo_log_stream_id = getattr(galileo_logger, "log_stream_id", None)
                 callbacks.append(
                     GalileoCallback(galileo_logger=galileo_logger, flush_on_chain_end=True)
                 )
@@ -295,6 +348,17 @@ def setup_telemetry() -> Telemetry:
                     f"GalileoCallback; project={os.getenv('GALILEO_PROJECT')!r} "
                     f"log_stream={os.getenv('GALILEO_LOG_STREAM')!r}"
                 )
+                if not galileo_project_id or not galileo_log_stream_id:
+                    galileo_detail += (
+                        " (WARNING: startup logger resolved without project/log-stream IDs; "
+                        "per-session logger creation may fail)"
+                    )
+                    _LOGGER.warning(
+                        "Galileo callback startup logger resolved without IDs "
+                        "(project_id=%r, log_stream_id=%r).",
+                        galileo_project_id,
+                        galileo_log_stream_id,
+                    )
             except Exception as exc:  # pragma: no cover - defensive
                 galileo_detail = f"callback path FAILED to initialize: {exc}"
 
@@ -431,5 +495,7 @@ def setup_telemetry() -> Telemetry:
         _provider=provider,
         _meter_provider=meter_provider,
         _galileo_logger=galileo_logger,
+        _galileo_project_id=galileo_project_id,
+        _galileo_log_stream_id=galileo_log_stream_id,
         callbacks=callbacks,
     )

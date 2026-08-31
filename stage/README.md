@@ -78,6 +78,11 @@ cp ../.env.example ../.env      # fill in SPLUNK_ACCESS_TOKEN + SPLUNK_REALM
 straight to it. Then open the storefront at <http://localhost:8080/>. Resourcing:
 ~6 GB RAM full / ~3 GB minimal, ~14 GB disk (demo-design §8.4).
 
+Concierge turn-guardrail envs (optional) are injected by the stage override:
+`CONCIERGE_TURN_RECURSION_LIMIT` (default `18`),
+`CONCIERGE_TURN_TIMEOUT_SECONDS` (default `120`), and
+`CONCIERGE_STREAM_PROGRESS_INTERVAL_SECONDS` (default `5`).
+
 ## Verify locally
 
 ```sh

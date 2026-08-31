@@ -199,6 +199,15 @@ body {
   font-size: 0.92rem;
 }
 
+.progress-banner {
+  width: min(1120px, 100%);
+  margin: 0 auto;
+  padding: 6px 20px 10px;
+  color: #5262a8;
+  font-size: 0.86rem;
+  font-weight: 600;
+}
+
 .composer {
   width: min(1120px, 100%);
   margin: 0 auto;
@@ -284,7 +293,8 @@ body {
   .meta-panel,
   .chat-window,
   .composer,
-  .error-banner {
+  .error-banner,
+  .progress-banner {
     padding-left: 100px;
     padding-right: 100px;
   }
