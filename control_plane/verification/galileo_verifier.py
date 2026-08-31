@@ -12,6 +12,11 @@ Named-signal → scorer mapping (demo-design §6/Appendix A):
 | signal                      | Galileo scorer(s)                              | check        |
 |-----------------------------|------------------------------------------------|--------------|
 | ``context_adherence_low``   | context_adherence / _luna / _plus, groundedness| value < thr  |
+
+``context_adherence_low`` is the signal behind the Galileo alert operators see as
+**"Context Adherence (SLM)"** — the SLM/Luna-based context-adherence scorer (V1's
+hero signal; when it drops very low it fires a Slack alert). It is matched by both
+the base ``context_adherence`` scorer and its Luna variant below.
 | ``ungrounded_claim``        | completeness(_luna), chunk_attribution_*        | value < thr  |
 | ``tool_selection_quality_low`` | tool_selection_quality                      | value < thr  |
 | ``tool_error``              | tool_error_rate, action_advancement             | value > thr  |
@@ -76,6 +81,9 @@ class _SignalSpec:
 #   high/max — error signal: fire when MAX(values) > threshold (any elevated error)
 #   detect/max — boolean/detection: fire when MAX(values) >= 1 (any positive hit)
 _SIGNAL_MAP: dict[str, _SignalSpec] = {
+    # Galileo alert name operators recognize: "Context Adherence (SLM)" — the
+    # SLM/Luna context-adherence scorer. Kept broad (base + _luna + _plus +
+    # groundedness) so it verifies whichever variant is enabled on the log stream.
     "context_adherence_low": _SignalSpec(
         ("context_adherence", "context_adherence_luna", "context_adherence_plus", "groundedness"),
         "low", "min", "GALILEO_METRIC_LOW_THRESHOLD",

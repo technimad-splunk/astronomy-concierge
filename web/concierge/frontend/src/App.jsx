@@ -20,6 +20,34 @@ function parseEventData(raw, fallback) {
   }
 }
 
+function resolveParentOrigin() {
+  try {
+    const params = new URLSearchParams(window.location.search || "");
+    const raw = (params.get("parent_origin") || "").trim();
+    if (!raw) return "";
+    return new URL(raw).origin;
+  } catch {
+    return "";
+  }
+}
+
+function notifyParentCartMutated() {
+  if (window.parent === window) {
+    return;
+  }
+  const parentOrigin = resolveParentOrigin();
+  if (!parentOrigin) {
+    return;
+  }
+  window.parent.postMessage(
+    {
+      type: "astronomy_concierge.cart_mutated",
+      source: "astronomy-concierge",
+    },
+    parentOrigin
+  );
+}
+
 // Shared shopper id, kept in the `concierge_session` cookie on host `localhost`.
 // Cookies on localhost ignore the port, so this value is shared with the
 // Astronomy Shop storefront tab (:8080) — where an injected bridge script keeps
@@ -152,6 +180,9 @@ function App() {
       }
       if (data.session_id) {
         setSessionId(data.session_id);
+      }
+      if (data.cart_mutated === true) {
+        notifyParentCartMutated();
       }
       setIsStreaming(false);
       source.close();

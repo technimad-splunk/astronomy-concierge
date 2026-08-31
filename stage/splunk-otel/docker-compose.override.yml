@@ -9,6 +9,15 @@
 # at our tracked file instead of the upstream placeholder.
 
 services:
+  frontend:
+    # Keep storefront-side overrides reproducible: the cart provider in
+    # src/frontend/providers/Cart.provider.tsx is synced from this repo by
+    # scripts/stage-setup.sh. Declaring build here ensures `stage-up.sh --build`
+    # rebuilds `frontend` so the override is actually served.
+    build:
+      context: ./
+      dockerfile: ${FRONTEND_DOCKERFILE}
+
   frontend-proxy:
     # Mount OUR Envoy template over the image's baked one so the proxy injects
     # the Astronomy Concierge bridge <script> into storefront HTML responses

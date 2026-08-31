@@ -85,6 +85,13 @@ class StoreClient:
         self.user_id = (user_id or session_id)
         self.base_url = (base_url or _base_url()).rstrip("/")
         self._client = httpx.Client(base_url=self.base_url, timeout=_REQUEST_TIMEOUT_S)
+        # Monotonic counter used by the web layer to detect cart mutations that
+        # happened during one agent turn.
+        self._cart_mutation_version = 0
+
+    @property
+    def cart_mutation_version(self) -> int:
+        return self._cart_mutation_version
 
     def close(self) -> None:
         self._client.close()
@@ -151,10 +158,12 @@ class StoreClient:
             raise StoreError(f"Invalid quantity {quantity!r}; expected an integer.") from exc
         if qty < 1 or qty > 100:
             raise StoreError("Quantity must be between 1 and 100.")
-        return self._post(
+        cart = self._post(
             "/api/cart",
             {"userId": self.user_id, "item": {"productId": pid, "quantity": qty}},
         )
+        self._cart_mutation_version += 1
+        return cart
 
     def place_order(
         self,
@@ -198,4 +207,6 @@ class StoreClient:
                 "creditCardExpirationMonth": 1,
             },
         }
-        return self._post("/api/checkout", body, params={"currencyCode": cur})
+        order = self._post("/api/checkout", body, params={"currencyCode": cur})
+        self._cart_mutation_version += 1
+        return order

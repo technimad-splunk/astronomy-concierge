@@ -151,6 +151,18 @@
     document.head.appendChild(style);
   }
 
+  function requestStorefrontCartRefresh() {
+    // The storefront cart badge is sourced from react-query cache; a synthetic
+    // focus/visibility tick prompts stale cart queries to refetch immediately.
+    window.dispatchEvent(new Event("focus"));
+    document.dispatchEvent(new Event("visibilitychange"));
+    window.dispatchEvent(
+      new CustomEvent("astronomy_concierge:cart_mutated", {
+        detail: { source: "astronomy-concierge" },
+      })
+    );
+  }
+
   function ensureNavLink(onOpen) {
     var currencySelect = document.querySelector(
       'select[data-cy="currency-switcher"]'
@@ -191,6 +203,21 @@
     var frame;
     var closeButton;
     var keyHandlerAttached = false;
+    var messageHandlerAttached = false;
+
+    function onMessage(event) {
+      if (!origin || event.origin !== origin) return;
+      if (!frame || event.source !== frame.contentWindow) return;
+      var data = event.data;
+      if (
+        !data ||
+        typeof data !== "object" ||
+        data.type !== "astronomy_concierge.cart_mutated"
+      ) {
+        return;
+      }
+      requestStorefrontCartRefresh();
+    }
 
     function closeModal() {
       if (!overlay) return;
@@ -209,10 +236,20 @@
     function openModal() {
       if (!overlay) return;
       if (!frame.src) {
-        frame.src = origin + "/";
+        try {
+          var frameUrl = new URL("/", origin);
+          frameUrl.searchParams.set("parent_origin", window.location.origin);
+          frame.src = frameUrl.toString();
+        } catch (e) {
+          frame.src = origin + "/";
+        }
       }
       overlay.classList.add("concierge-open");
       document.body.style.overflow = "hidden";
+      if (!messageHandlerAttached) {
+        window.addEventListener("message", onMessage);
+        messageHandlerAttached = true;
+      }
       if (!keyHandlerAttached) {
         document.addEventListener("keydown", onKeyDown);
         keyHandlerAttached = true;

@@ -37,6 +37,7 @@ class TurnResult:
     conversation_id: str
     session_id: str
     reply: str
+    cart_mutated: bool = False
 
 
 @dataclass
@@ -158,6 +159,7 @@ class ConciergeSessionManager:
         if self._telemetry.status.galileo_mode == "callback":
             self._telemetry.start_session(session.session_id)
 
+        cart_mutation_before = session.store.cart_mutation_version
         try:
             with using_session(session.session_id):
                 with self._tracer.start_as_current_span(
@@ -170,10 +172,12 @@ class ConciergeSessionManager:
                     result = session.agent.invoke({"messages": history}, config=config)
 
             session.history[:] = result.get("messages", history)
+            cart_mutated = session.store.cart_mutation_version > cart_mutation_before
             return TurnResult(
                 conversation_id=session.conversation_id,
                 session_id=session.session_id,
                 reply=self._extract_reply(result),
+                cart_mutated=cart_mutated,
             )
         finally:
             # In callback mode Galileo buffers traces in-process; flush each turn so
@@ -236,6 +240,7 @@ class ConciergeSessionManager:
                     "conversation_id": turn.conversation_id,
                     "session_id": turn.session_id,
                     "reply": turn.reply,
+                    "cart_mutated": turn.cart_mutated,
                 }
             ),
         }
