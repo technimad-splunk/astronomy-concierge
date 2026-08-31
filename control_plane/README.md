@@ -57,11 +57,14 @@ is cleanly attributable in APM. The optional boolean field `quiet_background`
 
 - **`play`** — if `quiet_background: true`, runs `scripts/loadgen.sh quiet`
   before applying the trigger. This POSTs to the Locust web API (`/stop`) via
-  `docker compose exec` (no host-port assumption), draining active users to 0.
-  Falls back to `docker compose stop load-generator` if the API is unreachable.
+  host `curl`: first through the Envoy `/loadgen` route on
+  `http://localhost:${ENVOY_PORT}` (default `8080`), then via the dynamically
+  resolved mapped host port for `load-generator:8089`. If both API paths fail,
+  it falls back to `docker compose stop load-generator`.
 - **`reset`** — **always** runs `scripts/loadgen.sh restore` (idempotent),
   POSTing `/swarm` with `user_count` from the demo's `.env` (`LOCUST_USERS`,
-  default 5). If the container was stopped (fallback), it starts it first.
+  default 5) through the same host-side API helper. If the container was
+  stopped (fallback), it starts it first.
 
 The script is a safe no-op (exit 0, clear message) when Docker, the daemon, or
 the load-generator container are unavailable — it never breaks play/reset when

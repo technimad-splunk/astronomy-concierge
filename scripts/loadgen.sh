@@ -28,10 +28,15 @@ COMPOSE_FILES=(-f "${COMPOSE_MAIN}" -f "${OVERRIDE_FILE}")
 # --- Read LOCUST_USERS from the demo's .env (default 5) ---------------------
 DEMO_ENV="${DEMO_DIR}/.env"
 LOCUST_USERS=5
+ENVOY_PORT=8080
 if [[ -f "${DEMO_ENV}" ]]; then
     val="$(grep -E '^LOCUST_USERS=' "${DEMO_ENV}" | head -1 | cut -d= -f2 | tr -d '[:space:]')" || true
     if [[ -n "${val}" && "${val}" =~ ^[0-9]+$ ]]; then
         LOCUST_USERS="${val}"
+    fi
+    envoy_val="$(grep -E '^ENVOY_PORT=' "${DEMO_ENV}" | head -1 | cut -d= -f2 | tr -d '[:space:]')" || true
+    if [[ -n "${envoy_val}" && "${envoy_val}" =~ ^[0-9]+$ ]]; then
+        ENVOY_PORT="${envoy_val}"
     fi
 fi
 
@@ -57,14 +62,74 @@ is_container_running() {
     docker compose "${COMPOSE_FILES[@]}" ps --status running load-generator 2>/dev/null | grep -q load-generator
 }
 
-# --- Locust API helpers (via docker compose exec, so it uses the compose
-#     network — no host-port assumption) -------------------------------------
-locust_api() {
-    local method="$1" path="$2"
-    shift 2
+# --- Locust API helpers (host-side; no in-container curl dependency) ---------
+resolve_locust_host_port() {
+    local container_id="" mapping="" port=""
     cd "${DEMO_DIR}"
-    docker compose "${COMPOSE_FILES[@]}" exec -T load-generator \
-        curl -s -o /dev/null -w '%{http_code}' -X "${method}" "http://localhost:8089${path}" "$@"
+    container_id="$(docker compose "${COMPOSE_FILES[@]}" ps -q load-generator 2>/dev/null | awk 'NR==1 { print $0 }')" || container_id=""
+    if [[ -z "${container_id}" ]]; then
+        return 1
+    fi
+    mapping="$(docker port "${container_id}" 8089 2>/dev/null | awk 'NR==1 { print $0 }')" || mapping=""
+    if [[ -z "${mapping}" ]]; then
+        return 1
+    fi
+    port="${mapping##*:}"
+    port="${port//[[:space:]]/}"
+    if [[ "${port}" =~ ^[0-9]+$ ]]; then
+        printf '%s' "${port}"
+        return 0
+    fi
+    return 1
+}
+
+locust_api() {
+    local method="$1" path="$2" http_code="" mapped_port=""
+    shift 2
+    http_code="$(curl -s -o /dev/null -w '%{http_code}' -X "${method}" \
+        "http://localhost:${ENVOY_PORT}/loadgen${path}" "$@" 2>/dev/null)" || http_code=""
+    if [[ "${method}" == "POST" && "${http_code}" == "405" ]]; then
+        http_code="$(curl -s -o /dev/null -w '%{http_code}' \
+            "http://localhost:${ENVOY_PORT}/loadgen${path}" 2>/dev/null)" || http_code=""
+    fi
+    if [[ "${http_code}" == "200" ]]; then
+        printf '%s' "${http_code}"
+        return 0
+    fi
+
+    mapped_port="$(resolve_locust_host_port)" || mapped_port=""
+    if [[ -n "${mapped_port}" ]]; then
+        http_code="$(curl -s -o /dev/null -w '%{http_code}' -X "${method}" \
+            "http://localhost:${mapped_port}${path}" "$@" 2>/dev/null)" || http_code=""
+        if [[ "${method}" == "POST" && "${http_code}" == "405" ]]; then
+            http_code="$(curl -s -o /dev/null -w '%{http_code}' \
+                "http://localhost:${mapped_port}${path}" 2>/dev/null)" || http_code=""
+        fi
+    fi
+    printf '%s' "${http_code}"
+}
+
+locust_stats_state() {
+    local stats_json="" mapped_port="" state=""
+    stats_json="$(curl -s "http://localhost:${ENVOY_PORT}/loadgen/stats/requests" 2>/dev/null)" || stats_json=""
+    if [[ -z "${stats_json}" ]]; then
+        mapped_port="$(resolve_locust_host_port)" || mapped_port=""
+        if [[ -n "${mapped_port}" ]]; then
+            stats_json="$(curl -s "http://localhost:${mapped_port}/stats/requests" 2>/dev/null)" || stats_json=""
+        fi
+    fi
+
+    if [[ -z "${stats_json}" ]]; then
+        return 1
+    fi
+
+    stats_json="${stats_json//$'\n'/ }"
+    if [[ "${stats_json}" =~ \"state\"[[:space:]]*:[[:space:]]*\"([^\"]+)\" ]]; then
+        state="${BASH_REMATCH[1]}"
+        printf '%s' "${state}"
+        return 0
+    fi
+    return 1
 }
 
 # --- Actions ----------------------------------------------------------------
@@ -78,8 +143,17 @@ do_quiet() {
     http_code="$(locust_api POST /stop 2>/dev/null)" || http_code=""
 
     if [[ "${http_code}" == "200" ]]; then
-        echo "loadgen: drained — active users ramping to 0."
-        return 0
+        local attempt=1 state=""
+        while (( attempt <= 10 )); do
+            state="$(locust_stats_state 2>/dev/null)" || state=""
+            if [[ -n "${state}" && "${state}" != "running" ]]; then
+                echo "loadgen: drained — Locust state is '${state}'."
+                return 0
+            fi
+            sleep 1
+            ((attempt+=1))
+        done
+        echo "loadgen: /stop returned 200 but Locust state is still 'running'; using fallback."
     fi
 
     echo "loadgen: Locust API returned '${http_code}'; falling back to docker compose stop..."

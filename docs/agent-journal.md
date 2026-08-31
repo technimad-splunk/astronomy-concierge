@@ -871,3 +871,34 @@ entry — there is no user-facing change yet. No application code or config touc
 - Scoped the listener to events with `detail.source === "astronomy-concierge"` to avoid unrelated custom events triggering cart refetches.
 
 **Effect on codebase / UX:** Embedded concierge add-to-cart now has a deterministic seam to refresh the storefront badge immediately after `cart_mutated`; rollout requires rebuilding the stage (`scripts/stage-up.sh --build`) so the rebuilt frontend image contains the synced override.
+
+---
+
+## 2026-08-31 — V1 quiet-background fix via host-side Locust API
+
+**What:** Updated the `invisible-failure` scenario to opt into `quiet_background: true` and reworked `scripts/loadgen.sh` so quiet/restore control uses host-side Locust API calls instead of `docker compose exec ... curl` in the `load-generator` container. Added post-stop state validation and refreshed the related V1 docs/talk track language.
+
+**Why:** This revises the earlier loadgen work from the 2026-06-18 quiet-background entry: `invisible-failure` had not enabled the flag, and the script's in-container `curl` path silently failed because `curl` is absent in the load-generator image. That forced an unintended container-stop fallback and made the "quiet" behavior look successful even when graceful API draining did not happen.
+
+**Decisions / trade-offs:**
+- Keep the fallback chain explicit: Envoy `/loadgen` host route first, dynamically resolved mapped host port second, `docker compose stop load-generator` last-resort only.
+- Preserve the script's soft-failure contract (exit 0 when stage/docker/container are unavailable) so Play/Reset remain safe when the stage is down.
+- Add a post-drain poll on `GET /stats/requests` and require `state != running` before reporting success; if not, fail visibly into fallback instead of silently degrading.
+- Keep restore semantics unchanged in spirit: `LOCUST_AUTOSTART=true` + running container still counts as success, with `/swarm` as best-effort acceleration.
+
+**Effect on codebase / UX:** `invisible-failure` Play now actually drains background load through Locust while keeping the load-generator container alive in the normal path, Reset restores running load, and logs/reporting clearly distinguish graceful drain from fallback container stop. Updated `control_plane/README.md`, `docs/runbook.md`, and the V1 caption to match.
+
+---
+
+## 2026-08-31 — Synced subagent model roster to live slugs
+
+**What:** Reconciled `.cursor/rules/subagent-models.mdc` with the model slugs currently exposed by Cursor and updated the assignment table to use only available models.
+
+**Why:** The rule's own maintenance section requires this whenever Cursor's model roster changes; stale slugs can cause unintended fallback behavior and inconsistent model-cost/performance choices.
+
+**Decisions / trade-offs:**
+- Removed unavailable slugs and retained only the currently available set used by this workspace.
+- Mapped deep-review/security-audit use cases to `claude-opus-5-thinking-high`, while keeping `gpt-5.3-codex` for code-writing and `composer-2.5` / `composer-2.5-fast` for planning and exploration/shell tasks.
+- Updated the "Last verified" stamp to `2026-08-31` so future agents can quickly detect drift from this baseline.
+
+**Effect on codebase / UX:** Subagent guidance now matches real tool availability, reducing accidental default-model fallback and keeping governance docs accurate for future agent runs.

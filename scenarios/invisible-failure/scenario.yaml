@@ -23,6 +23,11 @@ title: "The Invisible Failure"
 message: observability-oversight
 order: 1
 duration_min: 3
+
+# Drain the Locust load-generator before driving the agent so the Splunk APM
+# backdrop reflects only the agent's own path during this vignette.
+quiet_background: true
+
 trigger:
   type: tool_fault
   ref: get_product_details

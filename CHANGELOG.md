@@ -11,6 +11,16 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Intent:** Reconcile the subagent model-governance roster with the model slugs currently available in Cursor.
+  **Rationale:** The rule's maintenance contract requires agents to keep the roster aligned with real tool availability so subagent runs do not silently fall back to defaults.
+  **Impact:** `.cursor/rules/subagent-models.mdc` now lists only currently available slugs, updates assignment mappings to valid models (including `claude-opus-5-thinking-high` for deep review/security), refreshes examples, and updates the verification date to `2026-08-31`.
+
+### Fixed
+
+- **Intent:** Make `invisible-failure` reliably drain Locust during Play without stopping the load-generator container.
+  **Rationale:** The scenario did not opt into `quiet_background`, and `scripts/loadgen.sh` depended on in-container `curl` that is absent in the `load-generator` image, forcing an unintended container-stop fallback.
+  **Impact:** `scenarios/invisible-failure/scenario.yaml` now enables `quiet_background: true`; `scripts/loadgen.sh` now calls Locust from the host (Envoy `/loadgen` first, mapped host port second), verifies post-stop state before declaring success, and keeps container stop as explicit last-resort fallback. Related operator docs and talk track text were updated to reflect the new behavior and reset restore path.
+
 - **Intent:** Refine the `invisible-failure` (V1) SE talk track and expected-signal footprint per operator feedback: add a tangible cart-mismatch reveal, name the Galileo alert exactly, and state the true APM footprint (fully green).
   **Rationale:** The old talk track asked the audience to take the "ungrounded answer" on faith. Adding an "add to cart → open the store cart → compare prices" beat makes the hallucination concrete — the cart is served by the real cart/product-catalog services (not the faulted agent tools), so it shows the true `$101.96` while the agent quoted an invented price. Operators also asked for the precise alert name ("Context Adherence (SLM)" → Slack). The APM footprint is **fully green**: the operator confirmed they saw no consistent `flagd` errors (only transient startup blips), so V1 induces no visible infra signal — which is the whole point of an "invisible" failure. **Context Adherence (SLM)** → Slack is the sole signal.
   **Impact:** `scenarios/invisible-failure/captions/invisible-failure.md` now drives from the storefront-embedded concierge (shared cart), adds the cart-reveal beat, names **Context Adherence (SLM)** + the **Slack** alert, and states APM is fully green (concierge path + core store services, no notable errors); a cart-empty reset note was added. `docs/runbook.md` mirrors this (summary + per-vignette tables and a new "V1 reveal" callout). `control_plane/verification/galileo_verifier.py` documents that `context_adherence_low` is the "Context Adherence (SLM)" alert (no behavior change). `control_plane/verification/splunk_verifier.py` `apm_all_green` attestation requires the concierge path + core store services green with no scenario-caused errors (generic tolerance for ambient startup noise; no `flagd`-specific carve-out). Verified factually: the cart shows the real `$101.96` (live product API confirmed `units:101,nanos:960000000`).

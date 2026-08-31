@@ -11,19 +11,15 @@ simple file reads; cheap fast models stall on complex code generation.
 
 ## Model roster
 
-_Last verified: 2026-06-19. See **Maintenance** section below before trusting this table._
+_Last verified: 2026-08-31. See **Maintenance** section below before trusting this table._
 
 | Slug | Strength | Cost/speed |
 |---|---|---|
 | `gpt-5.3-codex` | Code writing, editing, refactoring | Fast, cheap |
 | `composer-2.5-fast` | Read-only exploration, simple searches | Fastest, cheapest |
 | `composer-2.5` | General-purpose, moderate reasoning | Balanced |
-| `claude-4.6-sonnet-medium-thinking` | Planning, architecture, analysis | Medium |
-| `claude-4.6-opus-max` | Deep review, security audit, complex synthesis | Slow, expensive |
-| `claude-opus-4-8-thinking-high` | Deep reasoning, complex synthesis, high-stakes analysis | Slowest, most expensive |
-| `gpt-5.3-codex-xhigh` | Hard refactors and deeper code reasoning | Slower, higher cost |
-| `gpt-5.4-high` | Strong general-purpose reasoning and synthesis | Slower, premium |
-| `gpt-5.5-medium` | Strong general reasoning with better speed balance | Medium-fast, mid-high cost |
+| `gpt-5.6-sol-medium` | Strong general reasoning and synthesis | Medium speed, mid-high cost |
+| `claude-opus-5-thinking-high` | Deep review, security audit, complex synthesis | Slow, expensive |
 
 ## Assignment rules
 
@@ -33,7 +29,7 @@ _Last verified: 2026-06-19. See **Maintenance** section below before trusting th
 | `shell` (running commands, git operations) | `composer-2.5-fast` |
 | `generalPurpose` writing/editing code | `gpt-5.3-codex` |
 | `generalPurpose` planning / analysis | `composer-2.5` |
-| `bugbot` / `security-review` | `claude-4.6-opus-max` |
+| `bugbot` / `security-review` | `claude-opus-5-thinking-high` |
 | `best-of-n-runner` (isolated code experiments) | `gpt-5.3-codex` |
 
 ## Do / Don't
@@ -43,7 +39,7 @@ _Last verified: 2026-06-19. See **Maintenance** section below before trusting th
 ✅ task("Refactor the checkout tool", subagent_type="generalPurpose", model="gpt-5.3-codex")
 ✅ task("Plan the caching strategy", subagent_type="generalPurpose", model="composer-2.5")
 ❌ Omitting `model` (inherits parent — often overkill for the subtask)
-❌ Using claude-4.6-opus-max for a simple file search
+❌ Using claude-opus-5-thinking-high for a simple file search
 ❌ Using composer-2.5-fast for a nuanced architecture decision
 ```
 

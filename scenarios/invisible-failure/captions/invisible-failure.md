@@ -40,7 +40,9 @@ alert. That's the whole point: nothing in APM indicates a problem.
 - The agent then answers a price/spec question from incomplete context, creating
   an ungrounded response quality failure.
 
-No `quiet_background` — normal store traffic remains active.
+`quiet_background: true` drains the Locust load generator during setup, so the
+trace and service-map view are attributable to the agent path alone. `Reset`
+restores normal background load.
 
 ---
 
@@ -134,11 +136,12 @@ the agent's answer is ungrounded.
 
 Switch to Splunk APM (environment `local-agent-galileo`).
 
-> *"Service health is green across the board. This was a clean, fast tool call —
-> no backend product-catalog fault involved."*
+> *"Service health is green across the board. We intentionally drained
+> background load for this run, so this clean trace is the agent path itself —
+> still no backend product-catalog fault involved."*
 
-- **Service Map:** `astronomy-concierge` and the core store services are all
-  green — no notable errors anywhere.
+- **Service Map:** `astronomy-concierge` and the core store services are green
+  for this run's path — no notable errors anywhere.
 - **Trace view:** the request completes successfully (HTTP 200); the stale tool
   seam means no product-catalog backend call on this path.
 
