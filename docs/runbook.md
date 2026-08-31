@@ -238,6 +238,7 @@ PID gracefully).
 | **Galileo shows no traces** | Verify `GALILEO_API_KEY` is set and non-empty; the concierge logs "Galileo export: enabled" at startup |
 | **Splunk shows no data** | Verify `SPLUNK_ACCESS_TOKEN` + `SPLUNK_REALM`; check collector logs for export errors |
 | **Load-generator noise** masks the vignette signal | V1 (`invisible-failure`) and V2 (`compounding-error`) use `quiet_background: true` (the harness drains the Locust load generator); V3 and V4 intentionally keep background load present |
+| **No traffic after Reset** | Check `http://localhost:8080/loadgen/stats/requests`; if `state=spawning` with `user_count=0`, run `bash scripts/loadgen.sh restore` and confirm it returns `state=running` with users before replaying |
 | **Scenario play has no effect** | Run `scripts/control-plane.sh reset <id>` first, then re-play; confirm the stage is up |
 | **Flagd flag not applying** | Check `http://localhost:8080/feature` to see current flag states; flagd hot-reloads from its config, no restart needed |
 | **Agent gives unexpected response** | Set `MODEL_TEMPERATURE=0.0` in `.env` (the default); use the exact known-good prompt from the talk track |

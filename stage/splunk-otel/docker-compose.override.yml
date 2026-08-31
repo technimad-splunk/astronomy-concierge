@@ -33,6 +33,13 @@ services:
     environment:
       - CONCIERGE_WEB_PORT=${CONCIERGE_WEB_PORT:-8090}
 
+  load-generator:
+    environment:
+      # The Playwright browser user cannot be safely re-swarmed in-process and
+      # was already failing every task (`WebsiteBrowserUser.tracer`), so keep
+      # only the HTTP Locust user enabled for repeatable quiet/restore cycles.
+      - LOCUST_BROWSER_TRAFFIC_ENABLED=false
+
   otel-collector:
     # Publish the collector's OTLP receiver on STABLE host ports so the Phase-2
     # concierge agent — which runs on the host, not in compose — can export to it

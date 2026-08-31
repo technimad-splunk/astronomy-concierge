@@ -11,7 +11,7 @@ inside (demo-design §4).
 | `demo.ref` | **Yes** | **Single source of truth** for the vendored demo repo + pinned tag (`DEMO_REPO`, `DEMO_REF`). Bump the version here only. |
 | `opentelemetry-demo/` | **No** (gitignored) | The vendored upstream demo clone (the "Astronomy Shop"). Large + has its own git history, so we don't track it — `scripts/stage-setup.sh` recreates it. |
 | `splunk-otel/otelcol-config-extras.yml` | **Yes** | Our Splunk Observability OTLP/HTTP exporter (the collector merge). |
-| `splunk-otel/docker-compose.override.yml` | **Yes** | Injects `SPLUNK_ACCESS_TOKEN` / `SPLUNK_REALM` into the collector container. |
+| `splunk-otel/docker-compose.override.yml` | **Yes** | Injects `SPLUNK_ACCESS_TOKEN` / `SPLUNK_REALM` into the collector container and disables Locust browser traffic (`LOCUST_BROWSER_TRAFFIC_ENABLED=false`) for stable reset/restore behavior. |
 
 Helpers in [`scripts/`](../scripts/): `stage-setup.sh` (vendor + wire), `stage-up.sh` (start, self-bootstrapping), `stage-down.sh` (stop). Everything here is reproducible from a fresh clone of this repo — no manual checkout.
 
@@ -30,6 +30,11 @@ The Splunk fork (`splunk/opentelemetry-demo`) exists and is current, but at `v2.
 3. **Wires our tracked overrides into the clone** (re-synced on every run):
    - `splunk-otel/otelcol-config-extras.yml` → `opentelemetry-demo/src/otel-collector/otelcol-config-extras.yml` (the demo's default collector "extras" config it already loads)
    - `splunk-otel/docker-compose.override.yml` → `opentelemetry-demo/docker-compose.override.yml`
+
+The load-generator browser user is disabled in the tracked override because the
+Playwright Locust plugin cannot be re-swarmed safely in-process after `/stop`
+and was already erroring every task; keeping only HTTP Locust users preserves
+repeatable `scripts/loadgen.sh quiet`/`restore` cycles.
 
 Because `demo.ref` and both overrides are committed and the setup script recreates the rest, a fresh checkout needs no manual `git clone` and no hand-edits.
 

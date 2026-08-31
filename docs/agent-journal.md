@@ -902,3 +902,19 @@ entry — there is no user-facing change yet. No application code or config touc
 - Updated the "Last verified" stamp to `2026-08-31` so future agents can quickly detect drift from this baseline.
 
 **Effect on codebase / UX:** Subagent guidance now matches real tool availability, reducing accidental default-model fallback and keeping governance docs accurate for future agent runs.
+
+---
+
+## 2026-08-31 — Revised loadgen restore after Reset regression
+
+**What:** Revised the same-day loadgen quiet/restore work (see "V1 quiet-background fix via host-side Locust API") to close the Reset regression where Locust stayed wedged after repeated restore attempts. Added a tracked stage override to disable Locust browser traffic and reworked `scripts/loadgen.sh restore` into a state-verified, self-healing flow.
+
+**Why:** The previous implementation still treated `/swarm` HTTP 200 as success and could leave Locust in `state=spawning, user_count=0` when the Playwright user re-fired `test_start` in-process. Reset needed deterministic post-action health verification and an explicit recovery path when runtime state did not actually recover.
+
+**Decisions / trade-offs:**
+- Disabled `LOCUST_BROWSER_TRAFFIC_ENABLED` in the tracked override (rather than patching upstream/demo internals) so setup stays reproducible and we avoid editing `stage/opentelemetry-demo`.
+- Kept restore fast on the healthy path: start-and-wait (no `/swarm`) when container is stopped; `/swarm` only when Locust reports `state=stopped`.
+- Added bounded escalation (`docker compose restart load-generator`) only when healthy state is not reached, preserving quick steady-state loops while providing deterministic recovery.
+- Preserved soft-failure exit-0 behavior when Docker, daemon, demo dir, or container context is absent, so play/reset remain safe no-ops on stage-down environments.
+
+**Effect on codebase / UX:** Reset now reports real observed Locust status (`state` + `user_count`) and restores traffic repeatably across consecutive quiet/restore cycles; troubleshooting docs now key on `state=spawning, user_count=0` and direct operators to a verified restore path.

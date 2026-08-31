@@ -109,8 +109,8 @@ locust_api() {
     printf '%s' "${http_code}"
 }
 
-locust_stats_state() {
-    local stats_json="" mapped_port="" state=""
+locust_stats_snapshot() {
+    local stats_json="" mapped_port="" state="" user_count=""
     stats_json="$(curl -s "http://localhost:${ENVOY_PORT}/loadgen/stats/requests" 2>/dev/null)" || stats_json=""
     if [[ -z "${stats_json}" ]]; then
         mapped_port="$(resolve_locust_host_port)" || mapped_port=""
@@ -126,10 +126,59 @@ locust_stats_state() {
     stats_json="${stats_json//$'\n'/ }"
     if [[ "${stats_json}" =~ \"state\"[[:space:]]*:[[:space:]]*\"([^\"]+)\" ]]; then
         state="${BASH_REMATCH[1]}"
+    else
+        return 1
+    fi
+    if [[ "${stats_json}" =~ \"user_count\"[[:space:]]*:[[:space:]]*([0-9]+) ]]; then
+        user_count="${BASH_REMATCH[1]}"
+    else
+        return 1
+    fi
+    printf '%s %s' "${state}" "${user_count}"
+    return 0
+}
+
+locust_stats_state() {
+    local snapshot="" state=""
+    snapshot="$(locust_stats_snapshot 2>/dev/null)" || return 1
+    state="${snapshot%% *}"
+    if [[ -n "${state}" ]]; then
         printf '%s' "${state}"
         return 0
     fi
     return 1
+}
+
+locust_status_string() {
+    local snapshot="" state="" users=""
+    snapshot="$(locust_stats_snapshot 2>/dev/null)" || snapshot=""
+    if [[ -z "${snapshot}" ]]; then
+        printf '%s' "state=unknown, users=unknown"
+        return 0
+    fi
+    state="${snapshot%% *}"
+    users="${snapshot##* }"
+    printf 'state=%s, users=%s' "${state}" "${users}"
+}
+
+wait_for_locust_healthy() {
+    local timeout_s="${1:-15}" start_ts=0 now_ts=0 snapshot="" state="" users=""
+    start_ts="$(date +%s)"
+    while true; do
+        snapshot="$(locust_stats_snapshot 2>/dev/null)" || snapshot=""
+        if [[ -n "${snapshot}" ]]; then
+            state="${snapshot%% *}"
+            users="${snapshot##* }"
+            if [[ "${state}" == "running" && "${users}" =~ ^[0-9]+$ ]] && (( users >= 1 )); then
+                return 0
+            fi
+        fi
+        now_ts="$(date +%s)"
+        if (( now_ts - start_ts >= timeout_s )); then
+            return 1
+        fi
+        sleep 1
+    done
 }
 
 # --- Actions ----------------------------------------------------------------
@@ -163,40 +212,83 @@ do_quiet() {
 }
 
 do_restore() {
+    local total_budget_s=90 quick_budget_s=15 start_ts=0 now_ts=0 elapsed_s=0 remaining_s=0
+    local snapshot="" state="" users="" status_line="" http_code=""
     cd "${DEMO_DIR}"
+    start_ts="$(date +%s)"
 
     if ! is_container_running; then
-        echo "loadgen: load-generator container not running; attempting docker compose start..."
+        echo "loadgen: load-generator container not running; starting container (autostart path, no /swarm)..."
         docker compose "${COMPOSE_FILES[@]}" start load-generator 2>/dev/null || {
             echo "loadgen: could not start load-generator (stage may be down); skipping."
             exit 0
         }
-        echo "loadgen: load-generator started; waiting for Locust to initialise..."
-        sleep 5
+        now_ts="$(date +%s)"
+        elapsed_s=$(( now_ts - start_ts ))
+        remaining_s=$(( total_budget_s - elapsed_s ))
+        if (( remaining_s < 1 )); then
+            remaining_s=1
+        fi
+        if wait_for_locust_healthy "${remaining_s}"; then
+            status_line="$(locust_status_string)"
+            echo "loadgen: restored — ${status_line}."
+            return 0
+        fi
+        echo "loadgen: start path did not reach healthy state within ${remaining_s}s."
+    else
+        snapshot="$(locust_stats_snapshot 2>/dev/null)" || snapshot=""
+        if [[ -n "${snapshot}" ]]; then
+            state="${snapshot%% *}"
+            users="${snapshot##* }"
+            if [[ "${state}" == "running" && "${users}" =~ ^[0-9]+$ ]] && (( users >= 1 )); then
+                echo "loadgen: already healthy — state=running, users=${users}."
+                return 0
+            fi
+            if [[ "${state}" == "stopped" ]]; then
+                echo "loadgen: restoring load-generator via Locust API /swarm..."
+                http_code="$(locust_api POST /swarm \
+                    -d "user_count=${LOCUST_USERS}" \
+                    -d "spawn_rate=${LOCUST_USERS}" 2>/dev/null)" || http_code=""
+                if [[ "${http_code}" != "200" ]]; then
+                    echo "loadgen: /swarm returned '${http_code}'; will verify and self-heal if needed."
+                fi
+            else
+                echo "loadgen: observed state='${state}' users='${users}'; checking for healthy recovery."
+            fi
+        else
+            echo "loadgen: could not read Locust state; checking for healthy recovery."
+        fi
+
+        if wait_for_locust_healthy "${quick_budget_s}"; then
+            status_line="$(locust_status_string)"
+            echo "loadgen: restored — ${status_line}."
+            return 0
+        fi
     fi
 
-    # Best-effort Locust API call — LOCUST_AUTOSTART=true means the
-    # container auto-swarms on start, so a running container is already
-    # success. The API call is a nicety to ensure immediate swarming if
-    # the container was only API-stopped (not restarted).
-    echo "loadgen: restoring load-generator (LOCUST_AUTOSTART=true)..."
-    http_code="$(locust_api POST /swarm \
-        -d "user_count=${LOCUST_USERS}" \
-        -d "spawn_rate=${LOCUST_USERS}" 2>/dev/null)" || http_code=""
+    echo "loadgen: escalating to docker compose restart for a clean Locust process..."
+    docker compose "${COMPOSE_FILES[@]}" restart load-generator 2>/dev/null || {
+        status_line="$(locust_status_string)"
+        echo "loadgen: failed to restart load-generator; observed ${status_line}."
+        return 1
+    }
 
-    if [[ "${http_code}" == "200" ]]; then
-        echo "loadgen: restored — ${LOCUST_USERS} user(s) swarming."
+    now_ts="$(date +%s)"
+    elapsed_s=$(( now_ts - start_ts ))
+    remaining_s=$(( total_budget_s - elapsed_s ))
+    if (( remaining_s < 1 )); then
+        remaining_s=1
+    fi
+
+    if wait_for_locust_healthy "${remaining_s}"; then
+        status_line="$(locust_status_string)"
+        echo "loadgen: restored — ${status_line}."
         return 0
     fi
 
-    # Container is running + LOCUST_AUTOSTART=true → Locust will auto-swarm.
-    # The API returning empty/non-200 is expected in some environments.
-    if is_container_running; then
-        echo "loadgen: load-generator restored — autostart will resume ~${LOCUST_USERS} users within ~30-60s."
-        return 0
-    fi
-
-    echo "loadgen: warning — load-generator container is not running after restore attempt."
+    status_line="$(locust_status_string)"
+    echo "loadgen: restore failed — observed ${status_line}."
+    return 1
 }
 
 # --- Dispatch ---------------------------------------------------------------

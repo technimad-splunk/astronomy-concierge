@@ -62,9 +62,15 @@ is cleanly attributable in APM. The optional boolean field `quiet_background`
   resolved mapped host port for `load-generator:8089`. If both API paths fail,
   it falls back to `docker compose stop load-generator`.
 - **`reset`** — **always** runs `scripts/loadgen.sh restore` (idempotent),
-  POSTing `/swarm` with `user_count` from the demo's `.env` (`LOCUST_USERS`,
-  default 5) through the same host-side API helper. If the container was
-  stopped (fallback), it starts it first.
+  with health verification and self-healing:
+  - if the container is stopped, it `docker compose start`s it and waits for
+    Locust autostart (no `/swarm`, which would double-start Locust);
+  - if the container is running and Locust reports `state=stopped`, it takes
+    the cheap `/swarm` path;
+  - if Locust does not reach `state=running` with users, it escalates to
+    `docker compose restart load-generator` and waits again within a bounded
+    timeout budget.
+  Success/failure output reports the observed Locust state and user count.
 
 The script is a safe no-op (exit 0, clear message) when Docker, the daemon, or
 the load-generator container are unavailable — it never breaks play/reset when
