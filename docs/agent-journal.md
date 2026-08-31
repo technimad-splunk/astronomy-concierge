@@ -809,3 +809,65 @@ entry — there is no user-facing change yet. No application code or config touc
 - Did NOT switch to per-tool-call overlay reads: `reload()` already rebuilds the open chat's session on its next message (verified), and `mode=remove` structurally requires a graph rebuild (it changes the tool set), so build-time read remains the coherent design. Per-call read is noted as a rejected alternative.
 
 **Effect on codebase / UX:** Playing `invisible-failure` now faults all three catalog-read tools with the shared stale snapshot, so the agent cannot fetch a grounded price and must answer from the partial snapshot (or hallucinate) — restoring the ungrounded-answer punchline while Splunk stays green. Takes effect with just re-Play + a fresh chat message; no container restart needed (control-plane code is a host process; the concierge image is unchanged).
+
+---
+
+## 2026-07-22 — V1 talk-track refinement: cart-mismatch reveal + exact signal names
+
+**What:** Reworked the `invisible-failure` SE talk track and expected-signal footprint per operator feedback: added an "add to cart → open the store cart → compare the cart price vs. the price the agent quoted" reveal, named the Galileo alert exactly ("Context Adherence (SLM)" → Slack), and stated the true APM footprint (some `flagd` errors expected; concierge + core services green). Mirrored in the runbook; verifier comments/labels aligned.
+
+**Why:** The prior reveal asked the audience to trust the "ungrounded answer" abstractly. The cart makes it tangible: the store cart is served by the real cart/product-catalog services (not the faulted agent tools), so it shows the true price while the agent quoted an invented one. Operators wanted the precise alert name and an honest APM story.
+
+**Evidence / factual checks:**
+- Cart price is ground truth: live product API `GET /api/products/OLJCESPC7Z` returns `priceUsd {units:101, nanos:960000000}` = **$101.96**; `add_to_cart` and the store cart page are not on the faulted tool path (only the product-*read* tools are faulted), so the cart shows the real price vs. the agent's hallucinated one.
+- Shared cart requires driving from the storefront-embedded concierge widget (the `concierge_session` cookie bridge in `web/concierge/embed/concierge-bridge.js`); the standalone :8090 concierge uses a separate cart id. Documented this in the caption + runbook.
+- flagd: initially I could not tie flagd errors to the scenario (V1 flips no feature flag; live `flagd`/`flagd-ui` logs were clean). The operator then **confirmed** they saw no consistent flagd errors — only transient startup blips. So the footprint is corrected to **fully green APM** (see the 2026-07-22 correction entry below); flagd is not called out at all.
+
+**Decisions / trade-offs:**
+- Verifier changes are label/comment-only + a minimal attestation-text edit — no behavioral/threshold changes (avoid overfitting). `context_adherence_low` already matched the base + Luna (SLM) context-adherence scorers.
+
+**Effect on codebase / UX:** `scenarios/invisible-failure/captions/invisible-failure.md` and `docs/runbook.md` now walk the SE through the cart reveal and name the exact Galileo alert + Slack; the two verifiers read consistently with that footprint. No runtime/agent code changed.
+
+---
+
+## 2026-07-22 — Correction: V1 APM footprint is fully green (drop "flagd errors expected")
+
+**What:** Reversed the "some flagd errors are expected" framing added earlier the same day. The operator verified they did NOT see consistent flagd errors (only transient startup blips). V1's APM footprint is now stated as **fully green** — concierge path + core store services healthy, no notable errors — with Galileo **Context Adherence (SLM)** → Slack as the **sole** signal.
+
+**Why:** The earlier framing was based on the operator's initial expectation of flagd noise; on verification it didn't hold. Telling the SE to look for flagd errors is both inaccurate and self-defeating for an "invisible failure" — the story is strongest when APM shows nothing at all.
+
+**Decisions / trade-offs:**
+- Reverted the `flagd`-specific carve-out in `splunk_verifier.py` `apm_all_green`; kept a **generic** tolerance for ambient/transient startup noise (so the attestation won't flap) rather than special-casing any service.
+- Also dropped the pre-existing "not a claim every service is green (background chaos)" disclaimer, which contradicted the corrected "concierge path + core store services green" framing.
+
+**Effect on codebase / UX:** Caption, runbook (summary row + per-vignette row + "V1 reveal" callout), and the Splunk verifier attestation now consistently state fully-green APM with no flagd carve-out. No runtime/agent code changed. (Per-file coordination note: `web/concierge/embed`/shop-frontend were intentionally untouched — another branch owns those.)
+
+---
+
+## 2026-07-22 — Storefront cart badge refresh after embedded concierge cart mutations
+
+**What:** Wired end-to-end notification so when the concierge iframe adds to the shared cart, the Astronomy Shop parent page refreshes its cart badge without a manual navigation.
+
+**Why:** V1's cart-mismatch reveal depends on the SE using the storefront-embedded concierge; if the badge stays stale after "add to cart" in chat, the demo flow feels broken even though the cart page would show the item.
+
+**Decisions / trade-offs:**
+- Detect mutations via a monotonic counter on `StoreClient` (increment on add/checkout) compared around each agent turn — simpler than parsing tool-call logs and matches the actual store API side effects.
+- Parent notification uses `postMessage` with an explicit `parent_origin` query param (set by `concierge-bridge.js`) rather than `"*"` for origin safety.
+- Storefront nudge uses synthetic focus/visibility events plus `astronomy_concierge:cart_mutated` so react-query refetches without modifying shop frontend code in this change.
+
+**Effect on codebase / UX:** After an in-chat add-to-cart, the :8080 nav cart badge should update while the modal stays open. Standalone :8090 concierge (no parent) is unchanged.
+
+---
+
+## 2026-07-22 — Harden cart badge refresh with tracked storefront override
+
+**What:** Added a tracked storefront override of `Cart.provider.tsx` that listens for `astronomy_concierge:cart_mutated` and immediately invalidates/refetches the `['cart']` react-query key, then wired stage setup to sync this override into the vendored demo clone.
+
+**Why:** The bridge-only synthetic focus/visibility approach is heuristic and can miss when iframe focus semantics prevent the storefront's focus-manager refetch from firing. A direct query invalidation in the storefront provider is deterministic.
+
+**Decisions / trade-offs:**
+- Kept vendored edits reproducible by storing the override under `stage/splunk-otel/frontend/providers/Cart.provider.tsx` and copying it via `scripts/stage-setup.sh`, instead of hand-editing `stage/opentelemetry-demo` directly.
+- Added `frontend.build` to `stage/splunk-otel/docker-compose.override.yml` so `scripts/stage-up.sh --build` includes the storefront rebuild; otherwise source-only overrides would not be served from image-based containers.
+- Scoped the listener to events with `detail.source === "astronomy-concierge"` to avoid unrelated custom events triggering cart refetches.
+
+**Effect on codebase / UX:** Embedded concierge add-to-cart now has a deterministic seam to refresh the storefront badge immediately after `cart_mutated`; rollout requires rebuilding the stage (`scripts/stage-up.sh --build`) so the rebuilt frontend image contains the synced override.

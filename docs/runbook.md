@@ -22,7 +22,7 @@ induces a fault and reveals the contrast:
 
 | # | Vignette | Punchline | Galileo hero moment |
 |---|---|---|---|
-| 1 | **The Invisible Failure** | Infra stays green via stale cache hit; answer quality degrades | Context Adherence drops; ungrounded claim pinpointed |
+| 1 | **The Invisible Failure** | Infra stays fully green (no notable errors); the agent invents a price — proven by the cart showing the real `$101.96` | **Context Adherence (SLM)** drops very low → Slack alert |
 | 2 | **The Compounding Error** | One flaky payment cascades into retries and wasted tokens | Graph Engine cascade; Tool Selection Quality drop |
 | 3 | **The Firewall** | PII smuggled via a poisoned review; infra sees nothing | PII guardrail fires on the poisoned content |
 | 4 | **Trust the Judge** | 1 in 3 evals from a naive LLM-judge are wrong | Luna-2 / consensus evaluators agree with ground truth |
@@ -265,10 +265,39 @@ fine for V1, V3, V4 but may struggle with V2's multi-step tool chain.
 
 | Vignette | Scenario ID | Trigger | Splunk shows | Galileo hero |
 |---|---|---|---|---|
-| V1: The Invisible Failure | `invisible-failure` | `tool_fault` → `get_product_details` (`stale` snapshot) | All green (cache hit; no backend calls) | Context Adherence low; ungrounded claim |
+| V1: The Invisible Failure | `invisible-failure` | `tool_fault` → `get_product_details` + `search_products` + `get_recommendations` (`stale` snapshot) | Fully green (no backend calls, no notable errors) | **Context Adherence (SLM)** low → Slack alert; ungrounded claim |
 | V2: The Compounding Error | `compounding-error` | `feature_flag` → `paymentFailure` | Payment service errors/latency spike | Tool Selection Quality low; cascade in Graph Engine |
 | V3: The Firewall | `firewall` | `prompt_overlay` → poisoned review | APM normal (HTTP 200) | PII detected in conversation |
 | V4: Trust the Judge | `trust-the-judge` | `prompt_overlay` → eval-driver | N/A (eval layer) | Context Adherence low on incorrect eval cases |
 
 Each vignette's full talk track, known-good prompt, and beat-by-beat reveal
 are in `scenarios/<id>/captions/<id>.md`.
+
+### V1 reveal (the cart-mismatch payoff)
+
+Drive V1 from the **storefront-embedded** concierge so the cart is shared: open
+http://localhost:8080/, click **"AI Astronomy Concierge"** in the top nav, then:
+
+1. Ask for the Explorascope's price + specs (the known-good prompt). The agent
+   answers with an **invented** price/specs — note the price it quotes.
+2. Tell the concierge to **add the Explorascope to the cart** (`add_to_cart` is
+   not faulted, so it adds the real product).
+3. Open the store **cart** (http://localhost:8080/cart). It shows the **real
+   catalog price `$101.96`**, which **differs from the price the agent quoted**.
+   That mismatch is the payoff — a tangible hallucination while everything
+   "works." The cart is ground truth because it's served by the real cart /
+   product-catalog services, not the faulted agent tool path.
+
+**Signal footprint:**
+
+- **Galileo (hero):** **Context Adherence (SLM)** drops very low and **fires a
+  Slack alert** — this is the **only** signal of the failure. `ungrounded_claim`
+  (completeness) corroborates.
+- **Splunk APM:** **fully green** — the concierge path and core store services
+  are healthy with no notable errors. That's the point: nothing in APM indicates
+  a problem (V1 flips no feature flag and induces no backend error; it faults the
+  agent's tools directly, which APM cannot see).
+
+> Note: driving V1 from the standalone concierge at http://localhost:8090/ uses a
+> separate cart id, so the added item won't appear in the store cart — use the
+> embedded widget for the cart reveal.

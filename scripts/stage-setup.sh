@@ -33,12 +33,14 @@ DEMO_DIR="${REPO_ROOT}/stage/opentelemetry-demo"
 OVERRIDE_DIR="${REPO_ROOT}/stage/splunk-otel"
 EXTRAS_SRC="${OVERRIDE_DIR}/otelcol-config-extras.yml"
 OVERRIDE_SRC="${OVERRIDE_DIR}/docker-compose.override.yml"
+FRONTEND_CART_PROVIDER_SRC="${OVERRIDE_DIR}/frontend/providers/Cart.provider.tsx"
 
 # --- Preconditions ----------------------------------------------------------
 command -v git >/dev/null 2>&1 || { echo "FATAL: git not found on PATH." >&2; exit 2; }
 [[ -f "${REF_FILE}" ]]     || { echo "FATAL: ${REF_FILE} missing (the pinned-ref source of truth)." >&2; exit 2; }
 [[ -f "${EXTRAS_SRC}" ]]   || { echo "FATAL: tracked override ${EXTRAS_SRC} missing." >&2; exit 2; }
 [[ -f "${OVERRIDE_SRC}" ]] || { echo "FATAL: tracked override ${OVERRIDE_SRC} missing." >&2; exit 2; }
+[[ -f "${FRONTEND_CART_PROVIDER_SRC}" ]] || { echo "FATAL: tracked override ${FRONTEND_CART_PROVIDER_SRC} missing." >&2; exit 2; }
 
 # --- Read the pinned ref (single source of truth) ---------------------------
 # shellcheck disable=SC1090
@@ -82,6 +84,12 @@ fi
 # --- Step 2: wire in our tracked Splunk overrides (idempotent re-sync) -------
 install -m 0644 "${EXTRAS_SRC}" "${DEMO_DIR}/src/otel-collector/otelcol-config-extras.yml"
 install -m 0644 "${OVERRIDE_SRC}" "${DEMO_DIR}/docker-compose.override.yml"
-echo "stage-setup: wired Splunk overrides into the clone (collector extras + compose override)."
+# Keep the storefront cart provider override tracked in this repo and re-sync it
+# into the vendored clone each run (no manual edits under stage/opentelemetry-demo).
+mkdir -p "${DEMO_DIR}/src/frontend/providers"
+install -m 0644 \
+  "${FRONTEND_CART_PROVIDER_SRC}" \
+  "${DEMO_DIR}/src/frontend/providers/Cart.provider.tsx"
+echo "stage-setup: wired Splunk overrides into the clone (collector extras + compose override + frontend cart provider override)."
 
 echo "stage-setup: done. Next: scripts/stage-up.sh"
