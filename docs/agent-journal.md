@@ -979,3 +979,49 @@ entry — there is no user-facing change yet. No application code or config touc
 - Removed `receivers.otlp.protocols.grpc.max_recv_msg_size_mib: 8` so the collector returns to the upstream 4 MiB default and avoids unnecessary deviation.
 
 **Effect on codebase / UX:** Documentation and config now reflect the validated root cause and fix: app-side export batching resolved trace-drop risk, while the collector receive-limit bump was an unnecessary temporary mitigation and has been reverted.
+
+---
+
+## 2026-08-31 — Closed invisible-failure cart price bypass
+
+**What:** Reproduced `invisible-failure` with a real `/chat/stream` trace and confirmed two facts: the catalog-tool stale faults were landing, and the agent could still reach a live price via `add_to_cart` followed by `view_cart`. Then updated the scenario to fault `view_cart` with the same shared stale snapshot, added `checkout` to control-plane `tool_fault` validation, and added an authenticated `GET /admin/scenario/status` endpoint for live overlay observability.
+
+**Why:** The stale fault on catalog tools alone left an unfaulted in-agent cart read channel that returned `@ 101.96 USD`, undermining the vignette. The new status endpoint removes guesswork when diagnosing whether scenario overlays are actually active in the running concierge process.
+
+**Decisions / trade-offs:**
+- Kept the existing single shared stale `data` blob across faulted tools (no per-tool payloads), per project decision.
+- Accepted that faulting `view_cart` with the product snapshot is semantically awkward for cart shape, but it closes the price channel without violating the shared-blob contract.
+- Did not implement per-tool apply-failure CLI surfacing in this change because Step 1 evidence showed delivery was working in the reproduced run.
+
+**Effect on codebase / UX:** V1 now faults four read tools (`get_product_details`, `search_products`, `get_recommendations`, `view_cart`) so the agent cannot recover the live price through cart reads. Operators can call `/admin/scenario/status` (admin auth) to inspect active tool faults, prompt-overlay state, and RAG overlay doc count directly.
+
+---
+
+## 2026-08-31 — Added multi-trigger scenarios for V1 overlay
+
+**What:** Extended the scenario manifest/control-plane flow to support composed triggers (`triggers:` list) while preserving backward compatibility with legacy single-trigger manifests (`trigger:`). Converted `invisible-failure` to use a stale `tool_fault` plus a scenario-scoped `prompt_overlay` that forces a single concrete USD price stated as fact instead of refusal/looping.
+
+**Why:** The base concierge system prompt correctly forbids guessing prices, so stale-tool-only runs were ending in refusals or recursion-limit truncation. A vignette-scoped overlay was required to induce ungrounded claims without changing global agent behavior for other scenarios.
+
+**Decisions / trade-offs:**
+- Chose manifest-level `triggers:` composition over overloading `tool_fault` params so trigger contracts stay explicit and reusable.
+- Kept strict compatibility by mapping `trigger:` to the first entry and applying `triggers:` only when explicitly declared.
+- Applied triggers in declaration order and reset in reverse order to keep overlay teardown deterministic.
+- Tightened overlay wording to cap lookup retries and require a single concrete factual price claim format, improving demo stability.
+
+**Effect on codebase / UX:** `scripts/control-plane.sh list/play/reset` and the SE web UI now show and execute composite triggers, `invisible-failure` now produces priors-based price claims without global prompt edits, and reset fully clears both fault and overlay state (`/admin/scenario/status` empty, baseline price probes return real `101.96`).
+
+---
+
+## 2026-09-01 — Removed hedged price phrasing in V1
+
+**What:** Retuned only the `invisible-failure` inline `prompt_overlay` wording to remove hedged "estimated price" behavior and enforce a single concrete USD price stated as fact, while keeping one-attempt-per-tool anti-loop guidance.
+
+**Why:** The demo requires a confident ungrounded claim, not a self-labeled estimate. Hedged answers weaken the hallucination evidence and undercut the intended Galileo quality-signal contrast.
+
+**Decisions / trade-offs:**
+- Kept the overlay scenario-scoped in `scenarios/invisible-failure/scenario.yaml`; no base `SYSTEM_PROMPT` changes.
+- Explicitly banned uncertainty language, caveats, and verification suggestions in the overlay text to maximize deterministic factual-style replies.
+- Preserved the existing composed trigger architecture (`tool_fault` + `prompt_overlay`) and `view_cart` stale fault coverage unchanged.
+
+**Effect on codebase / UX:** Four consecutive runs produced factual-style invented prices (`$49.99/$49.95`) with `outcome=ok` and no recursion-limit exhaustion, while trace tool outputs remained the stale no-price snapshot and baseline reset still restored the real `$101.96` catalog price.

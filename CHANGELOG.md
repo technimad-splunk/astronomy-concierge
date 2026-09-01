@@ -11,6 +11,14 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Intent:** Make `invisible-failure` reliably induce a confident priors-based wrong-price claim by composing `tool_fault` and `prompt_overlay` in one scenario, without weakening global anti-guessing guardrails.
+  **Rationale:** A single stale `tool_fault` produced either safe refusals or recursion-limit failures because the base prompt forbids guessing prices. The fix had to be scenario-scoped and reversible so all other scenarios retain the strict baseline prompt behavior.
+  **Impact:** The manifest contract now supports multi-trigger scenarios via `triggers:` (backward-compatible with existing `trigger:` manifests). Control-plane play/reset paths now apply all declared triggers (reset in reverse order), and the SE web UI/README surfaces composite triggers. `scenarios/invisible-failure/scenario.yaml` now composes a stale product-read-family fault with an inline `prompt_overlay` that requires a single concrete USD price stated as fact when catalog data is incomplete (no hedging/disclaimers); the caption now documents the dual-trigger setup and the `ungrounded_claim` scorer-enable caveat.
+
+- **Intent:** Close the remaining `invisible-failure` price leak by removing the in-agent cart read path as an unfaulted route to the real `$101.96` price.
+  **Rationale:** Live trace evidence showed `tool_fault` delivery was working for catalog tools, but the agent could still call `add_to_cart` then `view_cart`, and `view_cart` exposed live unit prices. Faulting the same shared stale snapshot across `view_cart` keeps the scenario's single-blob contract while sealing that bypass.
+  **Impact:** `scenarios/invisible-failure/scenario.yaml` now faults `view_cart` in `also_fault` alongside the product-read family, and the V1 caption text now reflects the four-tool fault scope and its read-path implications. This prevents the agent from reading live cart prices during the vignette.
+
 - **Intent:** Restore Splunk GenAI translator compatibility by preventing concierge image rebuilds from floating OpenTelemetry past the removal of `opentelemetry._events`.
   **Rationale:** `splunk-otel-util-genai` currently imports the deprecated Events API that was removed in OTel 1.44.0, so unbounded upgrades broke translator initialization and produced startup `.pth` import tracebacks.
   **Impact:** `pyproject.toml` now bounds OTel core/instrumentation ranges below the breaking versions, a tracked `constraints.txt` pins the concierge runtime to `opentelemetry-{api,sdk,exporter-otlp}==1.43.0` and `opentelemetry-{instrumentation,semantic-conventions}==0.64b0`, and `web/concierge/Dockerfile` installs with that constraints file for reproducible rebuilds.
