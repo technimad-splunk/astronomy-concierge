@@ -27,7 +27,7 @@ from dotenv import load_dotenv
 from .manifest import Scenario
 from .paths import REPO_ROOT
 from .registry import Registry, discover
-from .triggers import TriggerError, apply_trigger, reset_trigger
+from .triggers import TriggerError, apply_triggers, reset_triggers
 from .verification import DEFAULT_INTERVAL_S, DEFAULT_TIMEOUT_S, run_verification
 
 _STATUS_GLYPH = {
@@ -65,7 +65,8 @@ def cmd_list(reg: Registry, args: argparse.Namespace) -> int:
         print(f"  {s.id}")
         print(f"      title    : {s.title}")
         print(f"      message  : {s.message}   duration: {s.duration_min} min{quiet}")
-        print(f"      trigger  : {s.trigger.type} (ref={s.trigger.ref})")
+        trigger_labels = ", ".join(f"{t.type}(ref={t.ref})" for t in s.triggers)
+        print(f"      trigger  : {trigger_labels}")
         print(f"      signals  : galileo=[{g}] splunk=[{sp}]")
     if reg.errors:
         print(f"\n{len(reg.errors)} folder(s) failed to load:")
@@ -101,7 +102,8 @@ def cmd_play(reg: Registry, args: argparse.Namespace) -> int:
         print(str(exc), file=sys.stderr)
         return 2
     print(f"Playing '{scenario.id}' — {scenario.title}")
-    print(f"  message: {scenario.message}   trigger: {scenario.trigger.type}")
+    trigger_labels = ", ".join(f"{t.type}(ref={t.ref})" for t in scenario.triggers)
+    print(f"  message: {scenario.message}   trigger: {trigger_labels}")
 
     if scenario.quiet_background:
         print("\nQuiet-background mode: draining the load-generator...")
@@ -110,15 +112,22 @@ def cmd_play(reg: Registry, args: argparse.Namespace) -> int:
                   file=sys.stderr)
 
     try:
-        result = apply_trigger(scenario)
+        results = apply_triggers(scenario)
     except TriggerError as exc:
         print(f"\nFATAL: trigger apply failed: {exc}", file=sys.stderr)
         return 1
-    print("\nTrigger applied:")
-    _print_trigger_result(result)
+    print("\nTrigger(s) applied:")
+    for result in results:
+        _print_trigger_result(result)
 
-    prompt = args.prompt or scenario.trigger.params.get("drive_prompt")
-    if scenario.trigger.type in {"tool_fault", "prompt_overlay", "rag_corpus"}:
+    prompt = args.prompt
+    if not prompt:
+        for trig in scenario.triggers:
+            candidate = trig.params.get("drive_prompt")
+            if isinstance(candidate, str) and candidate.strip():
+                prompt = candidate
+                break
+    if any(t.type in {"tool_fault", "prompt_overlay", "rag_corpus"} for t in scenario.triggers):
         print(
             "\nAgent-side trigger applied on the running concierge service. "
             "Drive this scenario via the concierge web chat."
@@ -135,7 +144,7 @@ def cmd_play(reg: Registry, args: argparse.Namespace) -> int:
     if args.no_drive or not prompt:
         if not prompt and not args.no_drive:
             print(
-                "\n(No --prompt and no trigger.params.drive_prompt — trigger applied only. "
+                "\n(No --prompt and no trigger.params.drive_prompt — trigger(s) applied only. "
                 "Run the agent with your known-good prompt to drive the scenario, then "
                 f"`verify {scenario.id}`.)"
             )
@@ -157,9 +166,10 @@ def cmd_reset(reg: Registry, args: argparse.Namespace) -> int:
     print(f"Resetting '{scenario.id}' — {scenario.title}")
     rc = 0
     try:
-        result = reset_trigger(scenario)
-        print("\nTrigger reset:")
-        _print_trigger_result(result)
+        results = reset_triggers(scenario)
+        print("\nTrigger(s) reset:")
+        for result in results:
+            _print_trigger_result(result)
     except TriggerError as exc:
         print(f"\nERROR: trigger reset failed: {exc}", file=sys.stderr)
         rc = 1

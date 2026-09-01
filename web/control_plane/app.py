@@ -27,7 +27,7 @@ from sse_starlette.sse import EventSourceResponse
 from control_plane.manifest import Scenario
 from control_plane.paths import REPO_ROOT
 from control_plane.registry import Registry, discover
-from control_plane.triggers import TriggerError, TriggerResult, apply_trigger, reset_trigger
+from control_plane.triggers import TriggerError, TriggerResult, apply_triggers, reset_triggers
 from control_plane.verification import (
     DEFAULT_INTERVAL_S,
     DEFAULT_TIMEOUT_S,
@@ -147,9 +147,20 @@ def _enforce_csrf_query(request: Request, csrf_token: str | None) -> None:
 
 
 def _scenario_payload(s: Scenario) -> dict[str, Any]:
-    drive_prompt = s.trigger.params.get("drive_prompt")
-    if not isinstance(drive_prompt, str):
-        drive_prompt = ""
+    drive_prompt = ""
+    for trigger in s.triggers:
+        candidate = trigger.params.get("drive_prompt")
+        if isinstance(candidate, str) and candidate.strip():
+            drive_prompt = candidate
+            break
+    triggers = [
+        {
+            "type": trigger.type,
+            "ref": trigger.ref,
+            "params": dict(trigger.params),
+        }
+        for trigger in s.triggers
+    ]
     return {
         "id": s.id,
         "title": s.title,
@@ -159,11 +170,8 @@ def _scenario_payload(s: Scenario) -> dict[str, Any]:
         "duration_min": s.duration_min,
         "drive_prompt": drive_prompt,
         "quiet_background": s.quiet_background,
-        "trigger": {
-            "type": s.trigger.type,
-            "ref": s.trigger.ref,
-            "params": dict(s.trigger.params),
-        },
+        "trigger": triggers[0],
+        "triggers": triggers,
         "expected_signals": {
             "galileo": list(s.expected_signals.galileo),
             "splunk": list(s.expected_signals.splunk),
@@ -395,7 +403,8 @@ def _run_play(req: PlayRequest, emit: Callable[[str], None]) -> PlaySummary:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     emit(f"Playing '{scenario.id}' — {scenario.title}")
-    emit(f"message={scenario.message} trigger={scenario.trigger.type}")
+    trigger_labels = ", ".join(f"{t.type}(ref={t.ref})" for t in scenario.triggers)
+    emit(f"message={scenario.message} trigger={trigger_labels}")
 
     if scenario.quiet_background:
         emit("Quiet-background mode enabled: draining load-generator.")
@@ -403,15 +412,22 @@ def _run_play(req: PlayRequest, emit: Callable[[str], None]) -> PlaySummary:
             emit("WARNING: load-generator quiet action returned non-zero; continuing.")
 
     try:
-        trigger_result = apply_trigger(scenario)
+        trigger_results = apply_triggers(scenario)
     except TriggerError as exc:
         raise HTTPException(status_code=500, detail=f"trigger apply failed: {exc}") from exc
 
-    emit("Trigger applied:")
-    for line in _trigger_result_lines(trigger_result):
-        emit(line)
+    emit("Trigger(s) applied:")
+    for trigger_result in trigger_results:
+        for line in _trigger_result_lines(trigger_result):
+            emit(line)
 
-    prompt = req.prompt or scenario.trigger.params.get("drive_prompt")
+    prompt = req.prompt
+    if not prompt:
+        for trigger in scenario.triggers:
+            candidate = trigger.params.get("drive_prompt")
+            if isinstance(candidate, str) and candidate.strip():
+                prompt = candidate
+                break
     if req.no_drive or not prompt:
         if not req.no_drive and not prompt:
             emit("No prompt configured; trigger applied only.")
@@ -445,10 +461,11 @@ def _run_reset(req: ResetRequest, emit: Callable[[str], None]) -> int:
     rc = 0
 
     try:
-        result = reset_trigger(scenario)
-        emit("Trigger reset:")
-        for line in _trigger_result_lines(result):
-            emit(line)
+        results = reset_triggers(scenario)
+        emit("Trigger(s) reset:")
+        for result in results:
+            for line in _trigger_result_lines(result):
+                emit(line)
     except TriggerError as exc:
         emit(f"ERROR: trigger reset failed: {exc}")
         rc = 1

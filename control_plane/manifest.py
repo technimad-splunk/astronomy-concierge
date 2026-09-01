@@ -10,10 +10,14 @@ Fields (all required unless noted):
 - ``title``            — human-readable name shown in the control plane.
 - ``message``          — scenario metadata label shown in control-plane listings.
 - ``duration_min``     — approximate runtime in minutes shown by ``list``.
-- ``trigger``          — how the failure is INDUCED:
+- ``trigger``          — how the failure is INDUCED (single-trigger form):
     - ``type``         — one of the four FIXED mechanisms (demo-design §7.3).
     - ``ref``          — the flag / corpus / tool / overlay the trigger acts on.
     - ``params``       — optional handler-specific knobs (mapping).
+- ``triggers``         — optional multi-trigger form (list of trigger objects).
+                         Use when one scenario must compose overlays (e.g.
+                         ``tool_fault`` + ``prompt_overlay``). Backward-compatible:
+                         existing ``trigger`` manifests continue to work.
 - ``expected_signals`` — ``galileo: [...]`` and ``splunk: [...]`` signal lists
                          the vignette promises will fire (for auto-verification).
 - ``talk_track``       — path (relative to the scenario folder) to the caption file.
@@ -70,6 +74,7 @@ class Scenario:
     talk_track: str
     reset: str
     quiet_background: bool = False
+    also_triggers: list[Trigger] = field(default_factory=list)
     # Locations resolved at load time (not part of the YAML contract).
     dir: Path = field(default=Path("."))
     manifest_path: Path = field(default=Path("."))
@@ -78,6 +83,11 @@ class Scenario:
     def talk_track_path(self) -> Path:
         """Absolute path to the caption file (talk_track is folder-relative)."""
         return self.dir / self.talk_track
+
+    @property
+    def triggers(self) -> list[Trigger]:
+        """All declared triggers in apply order (primary + optional siblings)."""
+        return [self.trigger, *self.also_triggers]
 
     def reset_path(self, repo_root: Path) -> Path:
         """Absolute path to the reset script (reset is repo-root relative)."""
@@ -107,6 +117,24 @@ def _str_list(val: Any, key: str, where: str) -> list[str]:
     return list(val)
 
 
+def _parse_trigger(raw: Any, where: str) -> Trigger:
+    if not isinstance(raw, dict):
+        raise ManifestError(f"{where}: trigger entry must be a mapping.")
+    trig_type = _require(raw, "type", where, types=(str,))
+    if trig_type not in TRIGGER_TYPES:
+        raise ManifestError(
+            f"{where}: unknown type '{trig_type}'. "
+            f"The trigger set is fixed: {', '.join(TRIGGER_TYPES)}."
+        )
+    trig_ref = _require(raw, "ref", where, types=(str,))
+    params = raw.get("params", {})
+    if params is None:
+        params = {}
+    if not isinstance(params, dict):
+        raise ManifestError(f"{where}: 'params' must be a mapping if present.")
+    return Trigger(type=trig_type, ref=trig_ref, params=dict(params))
+
+
 def parse_manifest(data: Any, *, scenario_dir: Path, manifest_path: Path) -> Scenario:
     """Validate a parsed mapping and build a :class:`Scenario` (no I/O)."""
     where = str(manifest_path)
@@ -128,19 +156,23 @@ def parse_manifest(data: Any, *, scenario_dir: Path, manifest_path: Path) -> Sce
     if duration_min <= 0:
         raise ManifestError(f"{where}: 'duration_min' must be a positive integer.")
 
-    trig_raw = _require(data, "trigger", where, types=(dict,))
-    trig_type = _require(trig_raw, "type", f"{where} -> trigger", types=(str,))
-    if trig_type not in TRIGGER_TYPES:
+    if "trigger" in data and "triggers" in data:
         raise ManifestError(
-            f"{where} -> trigger: unknown type '{trig_type}'. "
-            f"The trigger set is fixed: {', '.join(TRIGGER_TYPES)}."
+            f"{where}: declare either 'trigger' or 'triggers', not both."
         )
-    trig_ref = _require(trig_raw, "ref", f"{where} -> trigger", types=(str,))
-    params = trig_raw.get("params", {})
-    if params is None:
-        params = {}
-    if not isinstance(params, dict):
-        raise ManifestError(f"{where} -> trigger: 'params' must be a mapping if present.")
+
+    trigger_list: list[Trigger]
+    if "triggers" in data:
+        triggers_raw = data.get("triggers")
+        if not isinstance(triggers_raw, list) or not triggers_raw:
+            raise ManifestError(f"{where}: 'triggers' must be a non-empty list.")
+        trigger_list = [
+            _parse_trigger(raw, f"{where} -> triggers[{idx}]")
+            for idx, raw in enumerate(triggers_raw)
+        ]
+    else:
+        trig_raw = _require(data, "trigger", where, types=(dict,))
+        trigger_list = [_parse_trigger(trig_raw, f"{where} -> trigger")]
 
     sig_raw = _require(data, "expected_signals", where, types=(dict,))
     expected = ExpectedSignals(
@@ -161,7 +193,8 @@ def parse_manifest(data: Any, *, scenario_dir: Path, manifest_path: Path) -> Sce
         message=message,
         order=order,
         duration_min=int(duration_min),
-        trigger=Trigger(type=trig_type, ref=trig_ref, params=dict(params)),
+        trigger=trigger_list[0],
+        also_triggers=trigger_list[1:],
         expected_signals=expected,
         talk_track=talk_track,
         reset=reset,

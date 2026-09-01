@@ -119,7 +119,11 @@ function renderScenario(s) {
   card.appendChild(summary);
 
   const trigger = document.createElement("p");
-  trigger.textContent = `Trigger: ${s.trigger.type} (ref=${s.trigger.ref})`;
+  const triggerList = Array.isArray(s.triggers) && s.triggers.length ? s.triggers : [s.trigger];
+  const triggerText = triggerList
+    .map((item) => `${item.type} (ref=${item.ref})`)
+    .join(", ");
+  trigger.textContent = `Trigger: ${triggerText}`;
   card.appendChild(trigger);
 
   const promptLabel = document.createElement("label");

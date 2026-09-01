@@ -8,6 +8,8 @@ manifest validator also rejects unknown types.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from ..manifest import Scenario
 from .base import Trigger, TriggerError, TriggerResult
 from .feature_flag import FeatureFlagTrigger
@@ -43,6 +45,24 @@ def reset_trigger(scenario: Scenario) -> TriggerResult:
     return get_trigger(scenario.trigger.type).reset(scenario)
 
 
+def apply_triggers(scenario: Scenario) -> list[TriggerResult]:
+    """Apply all scenario triggers in declaration order."""
+    results: list[TriggerResult] = []
+    for trig in scenario.triggers:
+        scoped = replace(scenario, trigger=trig)
+        results.append(apply_trigger(scoped))
+    return results
+
+
+def reset_triggers(scenario: Scenario) -> list[TriggerResult]:
+    """Reset all scenario triggers in reverse declaration order."""
+    results: list[TriggerResult] = []
+    for trig in reversed(scenario.triggers):
+        scoped = replace(scenario, trigger=trig)
+        results.append(reset_trigger(scoped))
+    return results
+
+
 __all__ = [
     "Trigger",
     "TriggerError",
@@ -51,4 +71,6 @@ __all__ = [
     "get_trigger",
     "apply_trigger",
     "reset_trigger",
+    "apply_triggers",
+    "reset_triggers",
 ]

@@ -29,7 +29,8 @@ containerized concierge automatically share it — no manual step needed.
 - **list** — shows every drop-in folder discovered under `scenarios/` via the
   registry (and reports any folder whose manifest fails to validate, without
   breaking the rest of the listing).
-- **play** — applies the scenario's `trigger` (the fault is induced). For
+- **play** — applies the scenario's `trigger`/`triggers` in declaration order
+  (the fault is induced). For
   `tool_fault`, `prompt_overlay`, and `rag_corpus`, the CLI applies the trigger
   through the concierge admin API and prints the scenario drive prompt so you can
   drive the run in the concierge web chat. `feature_flag` may still use CLI
@@ -38,7 +39,8 @@ containerized concierge automatically share it — no manual step needed.
   **drained first** (via `scripts/loadgen.sh quiet`) so the agent's traffic is
   the only store activity — useful when a single failing checkout would be
   masked by continuous healthy background load.
-- **reset** — runs the **trigger-level reset** (authoritative, deterministic) and
+- **reset** — runs the **trigger-level reset** (authoritative, deterministic;
+  multi-trigger scenarios reset in reverse order) and
   then the scenario's `reset.sh` if present. Restores baseline. **Always**
   restores the load-generator (via `scripts/loadgen.sh restore`, idempotent) so
   it is never left drained.
@@ -77,6 +79,17 @@ the load-generator container are unavailable — it never breaks play/reset when
 the stage is down.
 
 ## The four fixed trigger mechanisms (demo-design §7.3)
+
+### Single vs multi-trigger manifest form
+
+`scenario.yaml` supports both:
+
+- `trigger:` (legacy/single trigger)
+- `triggers:` (new multi-trigger list)
+
+Use exactly one of those keys. Existing single-trigger scenarios remain valid
+unchanged; `triggers` is for compound vignettes that need multiple overlay seams
+active at once (for example `tool_fault` + `prompt_overlay`).
 
 The trigger set is **fixed** — scope creep erodes the "drop-in folder" guarantee.
 Each handler has `apply()` + `reset()`:
