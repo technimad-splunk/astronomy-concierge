@@ -355,6 +355,12 @@ async def admin_reload(request: Request) -> dict[str, int | str]:
     return {"status": "reloaded", "cleared_sessions": cleared}
 
 
+@app.get("/admin/scenario/status")
+async def admin_scenario_status(request: Request) -> dict[str, object]:
+    _require_admin(request)
+    return _manager(request).scenario_status()
+
+
 @app.post("/admin/scenario/apply")
 async def admin_apply_scenario(
     payload: ScenarioApplyRequest, request: Request

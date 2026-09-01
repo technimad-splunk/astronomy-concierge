@@ -39,6 +39,7 @@ _KNOWN_TOOLS = (
     "get_recommendations",
     "add_to_cart",
     "view_cart",
+    "checkout",
     "list_currencies",
 )
 _MODES = ("error", "remove", "stale")

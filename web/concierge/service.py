@@ -467,6 +467,20 @@ class ConciergeSessionManager:
         merged.update(self._prompt_overlay_docs)
         return merged
 
+    def scenario_status(self) -> dict[str, Any]:
+        """Return current in-memory overlay status for admin diagnostics."""
+        prompt_text = overlay.prompt_overlay_text()
+        return {
+            "tool_faults": overlay.faulted_tools(),
+            "prompt_overlay": {
+                "active": bool(prompt_text.strip()),
+                "chars": len(prompt_text),
+            },
+            "rag_overlay": {
+                "doc_count": len(self._rag_overlay_docs),
+            },
+        }
+
     async def apply_overlay(self, req: dict[str, Any]) -> int:
         trigger_type = str(req["trigger_type"])
         scenario_id = str(req["scenario_id"])
