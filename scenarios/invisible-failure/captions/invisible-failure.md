@@ -28,11 +28,14 @@ alert. That's the whole point: nothing in APM indicates a problem.
 
 **What `control-plane play invisible-failure` does:**
 
-- Applies a `tool_fault` with `mode=stale` to the whole product-read tool family:
-  `get_product_details` (primary) plus `search_products` and `get_recommendations`
-  (via `params.also_fault`). All three expose the same live catalog
-  price/description, so faulting only one lets the agent route around the stale
-  snapshot through a sibling tool and still fetch the real grounded price.
+- Applies two triggers in order:
+  1) a `tool_fault` with `mode=stale` to the whole product-read family plus the
+  in-agent cart-read channel: `get_product_details` (primary),
+  `search_products`, `get_recommendations`, and `view_cart` (via
+  `params.also_fault`), and
+  2) a scenario-scoped `prompt_overlay` that tells the model to stop retry
+  loops and answer missing price/spec questions with a single concrete price
+  stated as fact (no hedging/disclaimers).
 - The fault injects a scripted partial snapshot for product `OLJCESPC7Z`:
   name + category only, with pricing/spec fields intentionally missing.
 - The tool calls still succeed quickly (no backend error), so this path does
@@ -83,9 +86,10 @@ real product.
   (price + aperture/focal length/magnification), forcing the model to either
   disclose uncertainty or make ungrounded claims.
 - The whole product-read tool family (`get_product_details`, `search_products`,
-  `get_recommendations`) is faulted with the same stale snapshot, so the agent
-  can't quietly fetch the real price from a sibling tool — it has to answer from
-  incomplete context (or invent).
+  `get_recommendations`) plus in-agent `view_cart` is faulted with the same stale
+  snapshot, so the agent can't quietly fetch the real price from sibling catalog
+  tools or from the cart read path — it has to answer from incomplete context
+  (or invent).
 
 Because there is no correctness/ground-truth scorer active in this project,
 the partial-snapshot design is intentional: the failure is measured as
@@ -129,8 +133,8 @@ Shop (the cart icon at http://localhost:8080/cart).
 
 Why this is a clean proof: `add_to_cart` and the store cart page are **not** on
 the faulted tool path — they read the live cart/product-catalog services — so the
-cart is ground truth. Only the agent's product-*read* tools were faulted, so only
-the agent's answer is ungrounded.
+cart is ground truth. The agent-side read tools (product-family + `view_cart`)
+are faulted, so only the agent's read-path answer is ungrounded.
 
 ### Screen 1 — Splunk Observability (backdrop, ~45 seconds)
 
@@ -198,6 +202,9 @@ Galileo signals are verified programmatically (with retry for ingestion lag).
 SLM/Luna context-adherence metric). Splunk remains operator-attested because the
 CLI uses an ingest-only token; when attesting, confirm the concierge path plus
 core store services are green with no scenario-caused errors.
+If `ungrounded_claim` returns `UNVERIFIED`, that means the required Galileo
+completeness/chunk-attribution scorer is not enabled on the log stream, not that
+the model necessarily answered correctly.
 
 ---
 
@@ -207,7 +214,7 @@ core store services are green with no scenario-caused errors.
 scripts/control-plane.sh reset invisible-failure
 ```
 
-This clears the `tool_fault` overlay (all three faulted product-read tools) and
+This clears the `tool_fault` overlay (all four faulted read tools) and
 restores baseline tool behavior for the next run.
 
 If you ran the cart reveal, **empty the cart** before the next run so the stale
