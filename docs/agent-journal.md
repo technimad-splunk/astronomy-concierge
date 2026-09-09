@@ -1025,3 +1025,18 @@ entry — there is no user-facing change yet. No application code or config touc
 - Preserved the existing composed trigger architecture (`tool_fault` + `prompt_overlay`) and `view_cart` stale fault coverage unchanged.
 
 **Effect on codebase / UX:** Four consecutive runs produced factual-style invented prices (`$49.99/$49.95`) with `outcome=ok` and no recursion-limit exhaustion, while trace tool outputs remained the stale no-price snapshot and baseline reset still restored the real `$101.96` catalog price.
+
+---
+
+## 2026-09-01 — Switched firewall to rag_corpus retrieval path
+
+**What:** Rewired `scenarios/firewall` from `prompt_overlay` to `rag_corpus`, moved the poisoned review payload into `scenarios/firewall/corpus/starsense-explorer-reviews.md`, and removed the concierge service behavior that injected `prompt_overlay` payloads into the knowledge overlay.
+
+**Why:** The firewall vignette should demonstrate PII exposure entering through `search_knowledge_base` retrieval only. Keeping prompt overlays scoped to system-prompt mutation prevents unrelated prompt-overlay scenarios from polluting the shared RAG overlay state.
+
+**Decisions / trade-offs:**
+- Reused the existing `rag_corpus` trigger contract (`ref: corpus`) instead of adding a new trigger type.
+- Kept the existing firewall drive prompt and expected-signal ordering unchanged to preserve operator flow.
+- Left historical journal/changelog narrative intact and recorded the new behavior as an additive correction entry.
+
+**Effect on codebase / UX:** V3 now overlays poisoned docs through `rag_corpus` and resets by clearing only that corpus overlay; `prompt_overlay` apply/reset now affects system-prompt text only. This restores clean separation between retrieval-poisoning and prompt-instruction scenarios.

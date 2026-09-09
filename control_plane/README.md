@@ -99,7 +99,7 @@ Each handler has `apply()` + `reset()`:
 | `feature_flag` | sets the named flagd flag's `defaultVariant` to "on" in the running stage (flagd hot-reloads) | restores the original variant (saved under `.harness/state/`) | the demo's services |
 | `rag_corpus` | POSTs scenario `*.md` docs to concierge `/admin/scenario/apply` as in-memory knowledge overlay | POSTs `/admin/scenario/reset` to clear rag overlay | `agent/rag.py` |
 | `tool_fault` | POSTs a named tool fault spec (`mode=error`/`remove`/`stale`) to concierge `/admin/scenario/apply` | POSTs `/admin/scenario/reset` to clear that tool fault | `agent/tools.py` |
-| `prompt_overlay` | POSTs the scenario payload to concierge `/admin/scenario/apply` (system prompt + dual-channel knowledge doc) | POSTs `/admin/scenario/reset` to clear prompt overlay state | `agent/graph.py` |
+| `prompt_overlay` | POSTs the scenario payload to concierge `/admin/scenario/apply` (system-prompt overlay only) | POSTs `/admin/scenario/reset` to clear prompt overlay state | `agent/graph.py` |
 
 The agent-side triggers now deliver to the running concierge process over an
 authenticated admin API. The concierge stores overlay state in-memory, runs

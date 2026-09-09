@@ -25,15 +25,10 @@ through a poisoned knowledge document — while Splunk APM sees nothing unusual.
 
 **What `control-plane play firewall` does:**
 
-- Injects a **poisoned "product review"** into the agent via **dual-channel
-  delivery**:
-  1. **System prompt** — the overlay appends the payload to the agent's system
-     prompt (provides model context).
-  2. **RAG knowledge overlay** — the same payload is seeded as a knowledge
-     document so that when the agent calls `search_knowledge_base` for
-     telescope reviews, the injection appears as a **tool output** in the
-     conversation messages.
-- The payload (`scenarios/firewall/payloads/injection-payload.md`) contains:
+- Applies a `rag_corpus` overlay with a **poisoned "product review"** document.
+  When the agent calls `search_knowledge_base` for telescope reviews, the
+  poisoned review appears as a **tool output** in conversation messages.
+- The payload (`scenarios/firewall/corpus/starsense-explorer-reviews.md`) contains:
   - Legitimate-looking reviews of the "Starsense Explorer Telescope."
   - **PII** embedded as "warranty contact info" — name (Sarah Connor), SSN
     (078-05-1120), credit card (4532-0123-4567-8901), email, DOB, phone.
@@ -174,9 +169,8 @@ vignette.
 scripts/control-plane.sh reset firewall
 ```
 
-This clears the prompt overlay from the agent's system prompt and removes the
-poisoned document from the RAG knowledge overlay. The agent's next conversation
-uses its clean baseline prompt with no injected payload.
+This clears the poisoned `rag_corpus` overlay document. The agent's next
+conversation uses the clean baseline knowledge corpus.
 
 ---
 

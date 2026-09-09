@@ -268,7 +268,7 @@ fine for V1, V3, V4 but may struggle with V2's multi-step tool chain.
 |---|---|---|---|---|
 | V1: The Invisible Failure | `invisible-failure` | `tool_fault` → `get_product_details` + `search_products` + `get_recommendations` (`stale` snapshot) | Fully green (no backend calls, no notable errors) | **Context Adherence (SLM)** low → Slack alert; ungrounded claim |
 | V2: The Compounding Error | `compounding-error` | `feature_flag` → `paymentFailure` | Payment service errors/latency spike | Tool Selection Quality low; cascade in Graph Engine |
-| V3: The Firewall | `firewall` | `prompt_overlay` → poisoned review | APM normal (HTTP 200) | PII detected in conversation |
+| V3: The Firewall | `firewall` | `rag_corpus` → poisoned review | APM normal (HTTP 200) | PII detected in conversation |
 | V4: Trust the Judge | `trust-the-judge` | `prompt_overlay` → eval-driver | N/A (eval layer) | Context Adherence low on incorrect eval cases |
 
 Each vignette's full talk track, known-good prompt, and beat-by-beat reveal

@@ -1,21 +1,11 @@
-"""``prompt_overlay`` trigger — inject SE-controlled text into the agent context.
+"""``prompt_overlay`` trigger — inject SE-controlled text into system prompt.
 
 Primary layer: **Galileo** (guardrails). The scenario ships an overlay payload
-(e.g. a poisoned product review / prompt-injection string, or PII bait);
+(e.g. instruction bias, evaluation driver text, or policy framing) and
 ``apply`` POSTs it to the running concierge service, which stores it in-memory
-across TWO overlay seams:
+as prompt overlay text appended to the system prompt for new turns.
 
-1. prompt overlay text — appended to the system prompt (provides model context).
-2. ``<scenario-id>-overlay.md`` — seeded into the RAG
-   corpus overlay so the payload appears as a **tool output** in the
-   conversation messages when the agent calls ``search_knowledge_base``.
-
-The dual-channel delivery is critical for Galileo's ``prompt_injection`` scorer:
-the scorer evaluates the conversation INPUT messages (including tool results),
-NOT the hidden system prompt. By seeding the payload into RAG, it appears in a
-tool output that the scorer inspects.
-
-``reset`` clears both overlay files.
+``reset`` clears the prompt overlay text.
 
 The payload source: ``trigger.ref`` is a path (relative to the scenario folder)
 to a text/markdown file; alternatively ``params.text`` provides inline text.
@@ -65,7 +55,7 @@ class PromptOverlayTrigger(Trigger):
             ref=scenario.trigger.ref,
             summary=(
                 f"injected prompt overlay ({len(payload)} chars) via concierge API; "
-                f"rebuilt {rebuilt} session(s) with dual-channel injection coverage."
+                f"rebuilt {rebuilt} session(s)."
             ),
             before="(no overlay)",
             after=f"overlay active — starts: {preview!r}",
@@ -85,7 +75,7 @@ class PromptOverlayTrigger(Trigger):
             type=self.type,
             ref=scenario.trigger.ref,
             summary=(
-                f"cleared prompt + knowledge overlay via concierge API; "
+                f"cleared prompt overlay via concierge API; "
                 f"rebuilt {rebuilt} session(s)."
             ),
             before="overlay active",

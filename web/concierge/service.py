@@ -110,7 +110,6 @@ class ConciergeSessionManager:
         self._active_turns = 0
         self._shutting_down = False
         self._tracer = trace_api.get_tracer("web.concierge")
-        self._prompt_overlay_docs: dict[str, str] = {}
         self._rag_overlay_docs: dict[str, str] = {}
 
     async def _begin_turn(self) -> None:
@@ -462,11 +461,6 @@ class ConciergeSessionManager:
             session.store.close()
         return len(sessions)
 
-    def _merged_overlay_docs(self) -> dict[str, str]:
-        merged = dict(self._rag_overlay_docs)
-        merged.update(self._prompt_overlay_docs)
-        return merged
-
     def scenario_status(self) -> dict[str, Any]:
         """Return current in-memory overlay status for admin diagnostics."""
         prompt_text = overlay.prompt_overlay_text()
@@ -483,7 +477,6 @@ class ConciergeSessionManager:
 
     async def apply_overlay(self, req: dict[str, Any]) -> int:
         trigger_type = str(req["trigger_type"])
-        scenario_id = str(req["scenario_id"])
 
         if trigger_type == "tool_fault":
             tool_fault = req["tool_fault"]
@@ -498,15 +491,13 @@ class ConciergeSessionManager:
         elif trigger_type == "prompt_overlay":
             text = str(req.get("prompt_overlay_text", ""))
             overlay.set_prompt_overlay(text)
-            self._prompt_overlay_docs = {f"{scenario_id}-overlay.md": text}
-            overlay.set_knowledge_docs(self._merged_overlay_docs())
         elif trigger_type == "rag_corpus":
             docs = {
                 str(name): str(content)
                 for name, content in dict(req.get("rag_corpus_docs", {})).items()
             }
             self._rag_overlay_docs = docs
-            overlay.set_knowledge_docs(self._merged_overlay_docs())
+            overlay.set_knowledge_docs(self._rag_overlay_docs)
         else:
             raise ValueError(f"unsupported trigger_type: {trigger_type}")
 
@@ -522,11 +513,9 @@ class ConciergeSessionManager:
             overlay.clear_tool_fault(tool)
         elif trigger_type == "prompt_overlay":
             overlay.clear_prompt_overlay()
-            self._prompt_overlay_docs = {}
-            overlay.set_knowledge_docs(self._merged_overlay_docs())
         elif trigger_type == "rag_corpus":
             self._rag_overlay_docs = {}
-            overlay.set_knowledge_docs(self._merged_overlay_docs())
+            overlay.set_knowledge_docs(self._rag_overlay_docs)
         else:
             raise ValueError(f"unsupported trigger_type: {trigger_type}")
 

@@ -2,7 +2,7 @@
 # Reset "Trust the Judge" vignette back to baseline.
 #
 # The control-plane `reset` command handles the authoritative trigger-level
-# reset (clearing the prompt overlay + knowledge overlay). This per-scenario
+# reset (clearing the prompt overlay). This per-scenario
 # script handles any additional cleanup as defense-in-depth.
 #
 # Usage (called by `scripts/control-plane.sh reset trust-the-judge`):
@@ -12,5 +12,5 @@ set -euo pipefail
 echo "trust-the-judge/reset: trigger-level API reset is authoritative..."
 
 echo "trust-the-judge/reset: done — baseline restored."
-echo "  The control-plane trigger reset already cleared both overlays."
-echo "  The agent is back to its normal system prompt and baseline RAG corpus."
+echo "  The control-plane trigger reset already cleared the prompt overlay."
+echo "  The agent is back to its normal system prompt."

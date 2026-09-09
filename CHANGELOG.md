@@ -11,6 +11,10 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Intent:** Ensure firewall-scenario PII enters the agent only through retrieval tool output, not through prompt-overlay side effects.
+  **Rationale:** The existing `rag_corpus` trigger already provides the intended poisoned-document path (`search_knowledge_base` tool result), while dual-channel `prompt_overlay` seeding polluted the shared knowledge overlay for unrelated prompt-overlay scenarios.
+  **Impact:** `scenarios/firewall` now uses `rag_corpus` with a corpus doc (`corpus/starsense-explorer-reviews.md`), and concierge overlay handling now scopes `prompt_overlay` to system-prompt mutation only while `rag_corpus` exclusively owns in-memory knowledge docs.
+
 - **Intent:** Make `invisible-failure` reliably induce a confident priors-based wrong-price claim by composing `tool_fault` and `prompt_overlay` in one scenario, without weakening global anti-guessing guardrails.
   **Rationale:** A single stale `tool_fault` produced either safe refusals or recursion-limit failures because the base prompt forbids guessing prices. The fix had to be scenario-scoped and reversible so all other scenarios retain the strict baseline prompt behavior.
   **Impact:** The manifest contract now supports multi-trigger scenarios via `triggers:` (backward-compatible with existing `trigger:` manifests). Control-plane play/reset paths now apply all declared triggers (reset in reverse order), and the SE web UI/README surfaces composite triggers. `scenarios/invisible-failure/scenario.yaml` now composes a stale product-read-family fault with an inline `prompt_overlay` that requires a single concrete USD price stated as fact when catalog data is incomplete (no hedging/disclaimers); the caption now documents the dual-trigger setup and the `ungrounded_claim` scorer-enable caveat.
